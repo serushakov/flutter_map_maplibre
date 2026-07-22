@@ -37,26 +37,34 @@ with the camera owned by Dart.
   s.frameworks = 'Metal', 'QuartzCore', 'CoreGraphics', 'CoreText', 'ImageIO'
 
   # A static-library xcframework carries headers but CocoaPods does not register
-  # its module.modulemap, so Swift cannot `import MaplibreNativeC` without
-  # being told where to look. Simulator-only while this is a spike.
-  mln_slice   = '"$(PODS_TARGET_SRCROOT)/MaplibreNativeC.xcframework/ios-arm64-simulator"'
-  mln_headers = '"$(PODS_TARGET_SRCROOT)/MaplibreNativeC.xcframework/ios-arm64-simulator/Headers"'
+  # its module.modulemap, so Swift cannot `import MaplibreNativeC` without being
+  # told where to look. Both slices hold a library of the same name, so the
+  # -lmln-stripped that CocoaPods derives from the filename resolves for either
+  # SDK; only the search path has to vary.
+  mln_root    = '$(PODS_TARGET_SRCROOT)/MaplibreNativeC.xcframework'
+  mln_dev     = %("#{mln_root}/ios-arm64")
+  mln_sim     = %("#{mln_root}/ios-arm64-simulator")
+  mln_dev_hdr = %("#{mln_root}/ios-arm64/Headers")
+  mln_sim_hdr = %("#{mln_root}/ios-arm64-simulator/Headers")
 
   # Flutter.framework does not contain a i386 slice.
   s.pod_target_xcconfig = {
     'DEFINES_MODULE' => 'YES',
     'EXCLUDED_ARCHS[sdk=iphonesimulator*]' => 'i386 x86_64',
-    'HEADER_SEARCH_PATHS' => mln_headers,
-    'LIBRARY_SEARCH_PATHS' => mln_slice,
+    'HEADER_SEARCH_PATHS[sdk=iphoneos*]' => mln_dev_hdr,
+    'HEADER_SEARCH_PATHS[sdk=iphonesimulator*]' => mln_sim_hdr,
+    'LIBRARY_SEARCH_PATHS[sdk=iphoneos*]' => mln_dev,
+    'LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*]' => mln_sim,
   }
   # The app target links the archive too, and PODS_TARGET_SRCROOT is not
   # defined there — hence the PODS_ROOT-relative path.
-  mln_user_slice = '"$(PODS_ROOT)/../../../ios/MaplibreNativeC.xcframework/ios-arm64-simulator"'
+  mln_user_root = '$(PODS_ROOT)/../../../ios/MaplibreNativeC.xcframework'
   s.user_target_xcconfig = {
     # maplibre-native-ffi has no x86_64 simulator preset, so a universal
     # simulator build has nothing to link for that slice.
     'EXCLUDED_ARCHS[sdk=iphonesimulator*]' => 'i386 x86_64',
-    'LIBRARY_SEARCH_PATHS' => mln_user_slice,
+    'LIBRARY_SEARCH_PATHS[sdk=iphoneos*]' => %("#{mln_user_root}/ios-arm64"),
+    'LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*]' => %("#{mln_user_root}/ios-arm64-simulator"),
   }
 
   s.swift_version = '5.0'
