@@ -20,6 +20,13 @@ class ProbePage extends StatefulWidget {
 class _ProbePageState extends State<ProbePage> {
   ProbeResult? _result;
 
+  @override
+  void initState() {
+    super.initState();
+    // Auto-run so the probe can be driven headlessly (simctl, CI) without a tap.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _run());
+  }
+
   Future<void> _run() async {
     final result = await TextureProbe().run(width: 512, height: 512);
     if (!mounted) return;
