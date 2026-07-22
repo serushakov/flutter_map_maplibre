@@ -1,0 +1,5 @@
+package com.veduapp.flutter_map_maplibre_example
+
+import io.flutter.embedding.android.FlutterActivity
+
+class MainActivity : FlutterActivity()
