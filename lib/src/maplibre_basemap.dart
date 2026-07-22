@@ -162,12 +162,15 @@ class _MapLibreBasemapState extends State<MapLibreBasemap> {
           if (mounted) _pushCamera(camera);
         });
 
-        if (rendered == null) return const SizedBox.shrink();
+        // Draw the texture from the first frame. Waiting for the first camera
+        // push to resolve means a failed/slow push hides the map entirely,
+        // which is indistinguishable from the renderer not working.
+        final renderedOrCurrent = rendered ?? camera;
 
         return Transform(
           transform: widget.applyResidualTransform
               ? residualTransform(
-                  rendered: rendered.withNonRotatedSize(renderSize),
+                  rendered: renderedOrCurrent.withNonRotatedSize(renderSize),
                   current: camera,
                 )
               : Matrix4.identity(),
