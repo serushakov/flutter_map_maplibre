@@ -21,7 +21,17 @@ public class FlutterMapMaplibrePlugin: NSObject, FlutterPlugin {
     registrar.addMethodCallDelegate(instance, channel: channel)
   }
 
+  private var mapProbe: MapLibreProbe?
+
   public func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+    if call.method == "runMap" {
+      handleRunMap(call, result: result)
+      return
+    }
+    if call.method == "mapDiagnostics" {
+      result(mapProbe?.diagnostics ?? [String: Any]())
+      return
+    }
     guard call.method == "runProbe" else {
       result(FlutterMethodNotImplemented)
       return
@@ -58,5 +68,48 @@ public class FlutterMapMaplibrePlugin: NSObject, FlutterPlugin {
     }
 
     result(payload)
+  }
+
+  /// Spike: render a real MapLibre map into a Flutter texture.
+  private func handleRunMap(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+    let args = call.arguments as? [String: Any] ?? [:]
+    let width = args["width"] as? Int ?? 512
+    let height = args["height"] as? Int ?? 512
+    let scale = args["scale"] as? Double ?? 2.0
+    let styleURL =
+      args["styleUrl"] as? String
+      ?? "https://tiles.api.veduapp.com/styles/osm-liberty/style.json"
+
+    guard
+      let probe = MapLibreProbe(
+        width: width, height: height, scale: scale, styleURL: styleURL)
+    else {
+      result([
+        "ok": false,
+        "error": "MapLibreProbe init failed",
+        // The probe's own diagnostics die with the failed init, so the bridge
+        // stashes them statically.
+        "diagnostics": MLNBridge.lastFailureDiagnostics(),
+      ])
+      return
+    }
+
+    mapProbe = probe
+    let id = textures.register(probe)
+    probe.start { [weak self] in
+      // Every rendered frame: tell Flutter the texture changed.
+      self?.textures.textureFrameAvailable(id)
+    }
+
+    result([
+      "ok": true,
+      "textureId": Int(id),
+      "diagnostics": probe.diagnostics,
+    ])
+  }
+
+  /// Spike: read back the probe's diagnostics after it has been running.
+  public func currentMapDiagnostics() -> [String: Any] {
+    mapProbe?.diagnostics ?? [:]
   }
 }

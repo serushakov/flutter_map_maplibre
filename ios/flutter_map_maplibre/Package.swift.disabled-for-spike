@@ -1,0 +1,47 @@
+// swift-tools-version: 5.9
+// The swift-tools-version declares the minimum version of Swift required to build this package.
+
+import PackageDescription
+
+let package = Package(
+    name: "flutter_map_maplibre",
+    platforms: [
+        // maplibre-native-ffi's Apple presets set CMAKE_OSX_DEPLOYMENT_TARGET
+        // to 14.3, so this cannot go lower while the xcframework is linked.
+        .iOS("14.3")
+    ],
+    products: [
+        .library(name: "flutter-map-maplibre", targets: ["flutter_map_maplibre"])
+    ],
+    dependencies: [
+        .package(name: "FlutterFramework", path: "../FlutterFramework")
+    ],
+    targets: [
+        // Built from source out of maplibre-native-ffi. NOT committed — see
+        // .gitignore. Produced by:
+        //   cmake --preset ios-simulator-arm64-metal && cmake --build --preset …
+        //   xcodebuild -create-xcframework -library libmaplibre-native-c.a \
+        //     -headers <include dir with module.modulemap> -output MaplibreNativeC.xcframework
+        .binaryTarget(
+            name: "MaplibreNativeC",
+            path: "MaplibreNativeC.xcframework"
+        ),
+        .target(
+            name: "flutter_map_maplibre",
+            dependencies: [
+                .product(name: "FlutterFramework", package: "FlutterFramework"),
+                "MaplibreNativeC",
+            ],
+            linkerSettings: [
+                .linkedLibrary("c++"),
+                .linkedLibrary("z"),
+                .linkedFramework("Metal"),
+                .linkedFramework("QuartzCore"),
+                .linkedFramework("CoreGraphics"),
+                .linkedFramework("CoreText"),
+                .linkedFramework("ImageIO"),
+                .linkedFramework("CoreFoundation"),
+            ]
+        )
+    ]
+)

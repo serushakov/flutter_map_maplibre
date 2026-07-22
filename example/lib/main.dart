@@ -20,11 +20,13 @@ class ProbePage extends StatefulWidget {
 class _ProbePageState extends State<ProbePage> {
   ProbeResult? _result;
 
+  Map<String, Object?> _live = const {};
+
   @override
   void initState() {
     super.initState();
-    // Auto-run so the probe can be driven headlessly (simctl, CI) without a tap.
-    WidgetsBinding.instance.addPostFrameCallback((_) => _run());
+    // Auto-run so the probe can be driven headlessly (simctl, adb) without a tap.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _runMap());
   }
 
   Future<void> _run() async {
@@ -32,6 +34,25 @@ class _ProbePageState extends State<ProbePage> {
     if (!mounted) return;
     setState(() => _result = result);
     debugPrint('probe: $result');
+  }
+
+  /// Spike: a real MapLibre map into the texture, then poll its diagnostics
+  /// so we can see frames actually accumulating.
+  Future<void> _runMap() async {
+    final probe = TextureProbe();
+    final result = await probe.runMap(width: 512, height: 512, scale: 2);
+    if (!mounted) return;
+    setState(() => _result = result);
+    debugPrint('map: $result');
+
+    for (var i = 0; i < 12; i++) {
+      await Future<void>.delayed(const Duration(seconds: 1));
+      if (!mounted) return;
+      final live = await probe.mapDiagnostics();
+      if (!mounted) return;
+      setState(() => _live = live);
+      debugPrint('map diagnostics: $live');
+    }
   }
 
   @override
@@ -60,9 +81,10 @@ class _ProbePageState extends State<ProbePage> {
               Expanded(
                 child: SingleChildScrollView(
                   child: Text(
-                    result.diagnostics.entries
-                        .map((e) => '${e.key}: ${e.value}')
-                        .join('\n'),
+                    {
+                      ...result.diagnostics,
+                      ..._live,
+                    }.entries.map((e) => '${e.key}: ${e.value}').join('\n'),
                   ),
                 ),
               ),

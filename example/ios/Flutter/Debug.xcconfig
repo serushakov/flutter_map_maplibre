@@ -1,1 +1,11 @@
+#include? "Pods/Target Support Files/Pods-Runner/Pods-Runner.debug.xcconfig"
 #include "Generated.xcconfig"
+
+// SPIKE: maplibre-native-ffi ships no x86_64 simulator preset, and Xcode
+// builds a universal simulator binary by default. Must come after the
+// includes above so it wins.
+EXCLUDED_ARCHS[sdk=iphonesimulator*] = i386 x86_64
+
+// SPIKE: explicitly-built modules cannot resolve system modules alongside our
+// [system] modulemap on SWIFT_INCLUDE_PATHS.
+SWIFT_ENABLE_EXPLICIT_MODULES = NO
