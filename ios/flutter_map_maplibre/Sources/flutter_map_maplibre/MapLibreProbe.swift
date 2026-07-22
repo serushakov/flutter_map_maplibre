@@ -121,6 +121,16 @@ final class MapLibreProbe: NSObject, FlutterTexture {
   func start(onFrame: @escaping () -> Void) {
     self.onFrame = onFrame
     let link = CADisplayLink(target: self, selector: #selector(tick))
+
+    // On a ProMotion display a display link runs at 60Hz unless it asks for
+    // more. The ask is only honoured if the *host app* also sets
+    // CADisableMinimumFrameDuration in its Info.plist — a plugin cannot set
+    // that for its embedder, so any app using this package must opt in too.
+    if #available(iOS 15.0, *) {
+      link.preferredFrameRateRange = CAFrameRateRange(
+        minimum: 60, maximum: 120, preferred: 120)
+    }
+
     link.add(to: .main, forMode: .common)
     displayLink = link
   }

@@ -15,6 +15,13 @@ static NSMutableDictionary<NSString *, id> *gLastFailure = nil;
   NSInteger _steadyFrames;
   double _steadyRenderMs;
   double _steadyMaxMs;
+  BOOL _updateAvailable;
+  NSInteger _updatesAvailable;
+  NSInteger _idleEvents;
+  NSInteger _rendersWithoutUpdate;
+  BOOL _needsRepaint;
+  int64_t _nativeFrames;
+  int64_t _drawCalls;
 }
 
 + (NSDictionary<NSString *, id> *)lastFailureDiagnostics {
@@ -110,8 +117,13 @@ static NSMutableDictionary<NSString *, id> *gLastFailure = nil;
 
   mln_runtime_run_once(_runtime);
 
-  // Drain the queue. The spike renders every tick regardless, so the only
-  // reason to inspect events is to surface style-loading failures.
+  // Drain the queue. MapLibre reports MLN_RUNTIME_EVENT_MAP_RENDER_UPDATE_
+  // AVAILABLE when a render would actually produce something new; the header
+  // says to process the update only then. This still renders every tick, but
+  // counts how often it did so with no update pending — `rendersWithoutUpdate`
+  // is the wasted GPU work, and on an idle map it should be the whole tick
+  // rate. Measuring before gating: if the event turns out not to fire as
+  // documented, gating on it would silently freeze the map.
   mln_runtime_event event;
   memset(&event, 0, sizeof(event));
   event.size = (uint32_t)sizeof(event);
@@ -119,16 +131,55 @@ static NSMutableDictionary<NSString *, id> *gLastFailure = nil;
   do {
     hasEvent = false;
     if (mln_runtime_poll_event(_runtime, &event, &hasEvent) != MLN_STATUS_OK) break;
-    if (hasEvent && event.type == MLN_RUNTIME_EVENT_MAP_LOADING_FAILED) {
-      _diagnostics[@"loadingFailed"] = @YES;
-      if (event.message && event.message_size > 0) {
-        _diagnostics[@"loadingFailedMessage"] =
-            [[NSString alloc] initWithBytes:event.message
-                                     length:event.message_size
-                                   encoding:NSUTF8StringEncoding];
-      }
+    if (!hasEvent) break;
+
+    switch (event.type) {
+      case MLN_RUNTIME_EVENT_MAP_RENDER_UPDATE_AVAILABLE:
+        _updateAvailable = YES;
+        _updatesAvailable++;
+        break;
+
+      case MLN_RUNTIME_EVENT_MAP_IDLE:
+        _idleEvents++;
+        break;
+
+      case MLN_RUNTIME_EVENT_MAP_RENDER_FRAME_FINISHED:
+        // needs_repaint is MapLibre asking for another frame — a fade, a
+        // symbol transition, a tile still landing. It is the signal that
+        // distinguishes "settled" from "mid-animation".
+        if (event.payload &&
+            event.payload_size >= sizeof(mln_runtime_event_render_frame)) {
+          const mln_runtime_event_render_frame *frame = event.payload;
+          _needsRepaint = frame->needs_repaint;
+          _nativeFrames = frame->stats.frame_count;
+          _drawCalls = frame->stats.draw_call_count;
+        }
+        break;
+
+      case MLN_RUNTIME_EVENT_MAP_LOADING_FAILED:
+        _diagnostics[@"loadingFailed"] = @YES;
+        if (event.message && event.message_size > 0) {
+          _diagnostics[@"loadingFailedMessage"] =
+              [[NSString alloc] initWithBytes:event.message
+                                       length:event.message_size
+                                     encoding:NSUTF8StringEncoding];
+        }
+        break;
+
+      default:
+        break;
     }
   } while (hasEvent);
+
+  if (!_updateAvailable) _rendersWithoutUpdate++;
+  _updateAvailable = NO;
+
+  _diagnostics[@"updatesAvailable"] = @(_updatesAvailable);
+  _diagnostics[@"idleEvents"] = @(_idleEvents);
+  _diagnostics[@"rendersWithoutUpdate"] = @(_rendersWithoutUpdate);
+  _diagnostics[@"needsRepaint"] = @(_needsRepaint);
+  _diagnostics[@"nativeFrames"] = @(_nativeFrames);
+  _diagnostics[@"drawCalls"] = @(_drawCalls);
 
   // render_update blocks until the GPU finishes (the FFI's texture path calls
   // waitUntilCompleted), so this interval is CPU-record *plus* GPU-execute,

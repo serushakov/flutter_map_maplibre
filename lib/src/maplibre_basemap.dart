@@ -62,6 +62,9 @@ class _MapLibreBasemapState extends State<MapLibreBasemap> {
   /// frame or two — exactly what the residual transform absorbs.
   MapCamera? _rendered;
 
+  /// Newest camera seen while a push was in flight, sent once it resolves.
+  MapCamera? _pendingCamera;
+
   bool _pushInFlight = false;
   bool _creating = false;
   Timer? _diagnosticsTimer;
@@ -111,8 +114,36 @@ class _MapLibreBasemapState extends State<MapLibreBasemap> {
     _startDiagnosticsPolling();
   }
 
+  /// True when the native renderer is already showing this exact camera, so
+  /// pushing it again would be pure cost.
+  static bool _sameCamera(MapCamera? a, MapCamera b) =>
+      a != null &&
+      a.center.latitude == b.center.latitude &&
+      a.center.longitude == b.center.longitude &&
+      a.zoom == b.zoom &&
+      a.rotation == b.rotation;
+
+  /// Pushes [camera] to the renderer, at most one call in flight.
+  ///
+  /// The early return on an unchanged camera is what makes the widget settle.
+  /// Completing a push calls `setState`, which rebuilds, which schedules the
+  /// next push — so without a stopping condition an idle map drives a
+  /// permanent loop of channel round-trips, each one telling MapLibre via
+  /// `mln_map_request_repaint` that the map is dirty when nothing moved.
   void _pushCamera(MapCamera camera) {
-    if (_pushInFlight || _textureId == null) return;
+    if (_textureId == null) return;
+    if (_sameCamera(_rendered, camera)) return;
+
+    // Mid-gesture the camera moves again before the previous push resolves.
+    // Hold the newest and send it on completion: dropping it would leave the
+    // texture rendered for a slightly stale camera once the gesture ends, and
+    // nothing would rebuild to correct it. The residual transform keeps that
+    // placed correctly, but it would be visibly rendered for the wrong zoom.
+    if (_pushInFlight) {
+      _pendingCamera = camera;
+      return;
+    }
+
     _pushInFlight = true;
     _channel
         .setCamera(
@@ -123,7 +154,14 @@ class _MapLibreBasemapState extends State<MapLibreBasemap> {
         )
         .whenComplete(() {
           _pushInFlight = false;
-          if (mounted) setState(() => _rendered = camera);
+          if (!mounted) return;
+          setState(() => _rendered = camera);
+
+          final pending = _pendingCamera;
+          _pendingCamera = null;
+          if (pending != null && !_sameCamera(camera, pending)) {
+            _pushCamera(pending);
+          }
         });
   }
 
