@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_map/flutter_map.dart';
 
+import 'camera_conventions.dart';
 import 'maplibre_channel.dart';
 import 'residual_transform.dart';
 
@@ -117,8 +118,8 @@ class _MapLibreBasemapState extends State<MapLibreBasemap> {
         .setCamera(
           lat: camera.center.latitude,
           lng: camera.center.longitude,
-          zoom: camera.zoom,
-          bearing: camera.rotation,
+          zoom: maplibreZoom(camera.zoom),
+          bearing: maplibreBearing(camera.rotation),
         )
         .whenComplete(() {
           _pushInFlight = false;

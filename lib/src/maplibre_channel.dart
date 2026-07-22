@@ -67,6 +67,9 @@ class MapLibreChannel {
 
   /// Pushes the camera to the native renderer. The renderer is always a frame
   /// or two behind; the residual transform closes that gap on the Flutter side.
+  ///
+  /// [zoom] and [bearing] are in *MapLibre's* units, not `flutter_map`'s — see
+  /// `camera_conventions.dart`. They go straight to `mln_map_jump_to`.
   Future<void> setCamera({
     required double lat,
     required double lng,
