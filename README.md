@@ -3,8 +3,8 @@
 A natively-rendered MapLibre vector basemap for [`flutter_map`](https://pub.dev/packages/flutter_map),
 composited as a Flutter texture underneath your existing layers.
 
-**Status: working spike, iOS simulator only.** Read "What's missing" before
-depending on it.
+**Status: working spike — iOS and Android, emulators only.** No physical device
+has run this on either platform. Read "What's missing" before depending on it.
 
 ## Why
 
@@ -74,6 +74,20 @@ fling case.
   **not committed** — see
   `docs/superpowers/specs/2026-07-22-flutter-map-maplibre-ffi-spike.md` for the
   build recipe and the thirteen things that bite while doing it.
+
+### Android
+
+- **arm64-v8a only** in this spike, and **minSdk 24**.
+- A static `libmaplibre-native-c.a` at
+  `android/src/main/cpp/prebuilt/arm64-v8a/`, likewise **not committed** (63 MB
+  stripped; it dead-strips to an 18.7 MB `libmln_jni.so` in the APK). Rust is
+  mandatory for the Android FFI build, unlike Apple.
+- **`patches/0001-android-webpki-roots.patch` must be applied to the FFI before
+  building**, or no tile ever loads. `rustls-platform-verifier` rejects
+  certificates that every other client on the device accepts and reports it as
+  `invalid peer certificate: Revoked`. The patch selects the bundled webpki
+  roots on Android only. Consequence: user-installed and enterprise CAs are
+  ignored for map traffic, so debugging proxies cannot intercept tile requests.
 
 ## What's missing
 

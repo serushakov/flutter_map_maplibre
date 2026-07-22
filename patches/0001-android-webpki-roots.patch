@@ -1,0 +1,22 @@
+diff --git a/src/platform/rust/src/http_client.rs b/src/platform/rust/src/http_client.rs
+index e7336a3..404b4af 100644
+--- a/src/platform/rust/src/http_client.rs
++++ b/src/platform/rust/src/http_client.rs
+@@ -94,6 +94,17 @@ fn http_thread_pool() -> &'static threadpool::ThreadPool {
+ fn http_agent() -> &'static ureq::Agent {
+     static AGENT: OnceLock<ureq::Agent> = OnceLock::new();
+     AGENT.get_or_init(|| {
++        // Android uses the bundled webpki roots instead of the platform
++        // verifier. rustls-platform-verifier runs a second PKIX pass on top of
++        // Android's normal trust check and rejects certificates that every
++        // other client on the device accepts, reporting the failure as
++        // "Revoked" regardless of the actual cause. Trade-off: user-installed
++        // and enterprise CAs are no longer honoured for map traffic, so
++        // debugging proxies cannot intercept it.
++        #[cfg(target_os = "android")]
++        let mut tls_builder =
++            ureq::tls::TlsConfig::builder().root_certs(ureq::tls::RootCerts::WebPki);
++        #[cfg(not(target_os = "android"))]
+         let mut tls_builder =
+             ureq::tls::TlsConfig::builder().root_certs(ureq::tls::RootCerts::PlatformVerifier);
+         #[cfg(target_os = "windows")]
