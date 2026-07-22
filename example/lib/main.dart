@@ -64,7 +64,6 @@ class _MapPageState extends State<MapPage> with SingleTickerProviderStateMixin {
   @override
   Widget build(BuildContext context) {
     final stats = _diagnostics.entries
-        .where((e) => e.key.startsWith('render') || e.key == 'frameCount')
         .map((e) => '${e.key}: ${e.value}')
         .join('   ');
 

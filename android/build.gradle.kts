@@ -46,6 +46,28 @@ android {
 
     defaultConfig {
         minSdk = 24
+
+        // maplibre-native-ffi builds arm64-v8a and x86_64 only; this spike
+        // built arm64 alone, which is what the Apple-Silicon emulator uses.
+        ndk {
+            abiFilters += listOf("arm64-v8a")
+        }
+
+        externalNativeBuild {
+            cmake {
+                // Must match how maplibre-native-ffi was built, or the C++
+                // runtime symbols will not line up.
+                arguments += listOf("-DANDROID_STL=c++_shared")
+                cppFlags += listOf("-std=c++17", "-fexceptions", "-frtti")
+            }
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
     }
 
     testOptions {
