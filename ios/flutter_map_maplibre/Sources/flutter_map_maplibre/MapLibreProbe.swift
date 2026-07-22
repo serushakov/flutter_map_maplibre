@@ -136,6 +136,17 @@ final class MapLibreProbe: NSObject, FlutterTexture {
     }
   }
 
+  func setCamera(
+    latitude: Double, longitude: Double, zoom: Double, bearing: Double
+  ) {
+    bridge?.setCameraLatitude(
+      latitude, longitude: longitude, zoom: zoom, bearing: bearing)
+  }
+
+  func setStyle(_ url: String) {
+    bridge?.setStyleURL(url)
+  }
+
   func stop() {
     displayLink?.invalidate()
     displayLink = nil

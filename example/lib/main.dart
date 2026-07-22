@@ -1,96 +1,151 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
+import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_map_maplibre/flutter_map_maplibre.dart';
+import 'package:latlong2/latlong.dart';
 
-void main() => runApp(const ProbeApp());
+void main() => runApp(const ExampleApp());
 
-class ProbeApp extends StatelessWidget {
-  const ProbeApp({super.key});
+const _tallinn = LatLng(59.437, 24.7536);
+const _light = 'https://tiles.api.veduapp.com/styles/osm-liberty/style.json';
+const _darkStyle =
+    'https://tiles.api.veduapp.com/styles/osm-liberty-dark/style.json';
+
+class ExampleApp extends StatelessWidget {
+  const ExampleApp({super.key});
 
   @override
-  Widget build(BuildContext context) => const MaterialApp(home: ProbePage());
+  Widget build(BuildContext context) => const MaterialApp(home: MapPage());
 }
 
-class ProbePage extends StatefulWidget {
-  const ProbePage({super.key});
+class MapPage extends StatefulWidget {
+  const MapPage({super.key});
 
   @override
-  State<ProbePage> createState() => _ProbePageState();
+  State<MapPage> createState() => _MapPageState();
 }
 
-class _ProbePageState extends State<ProbePage> {
-  ProbeResult? _result;
+class _MapPageState extends State<MapPage> with SingleTickerProviderStateMixin {
+  final _mapController = MapController();
+  Map<String, Object?> _diagnostics = const {};
+  bool _dark = false;
+  Ticker? _ticker;
 
-  Map<String, Object?> _live = const {};
-
-  @override
-  void initState() {
-    super.initState();
-    // Auto-run so the probe can be driven headlessly (simctl, adb) without a tap.
-    WidgetsBinding.instance.addPostFrameCallback((_) => _runMap());
-  }
-
-  Future<void> _run() async {
-    final result = await TextureProbe().run(width: 512, height: 512);
-    if (!mounted) return;
-    setState(() => _result = result);
-    debugPrint('probe: $result');
-  }
-
-  /// Spike: a real MapLibre map into the texture, then poll its diagnostics
-  /// so we can see frames actually accumulating.
-  Future<void> _runMap() async {
-    final probe = TextureProbe();
-    final result = await probe.runMap(width: 512, height: 512, scale: 2);
-    if (!mounted) return;
-    setState(() => _result = result);
-    debugPrint('map: $result');
-
-    for (var i = 0; i < 12; i++) {
-      await Future<void>.delayed(const Duration(seconds: 1));
-      if (!mounted) return;
-      final live = await probe.mapDiagnostics();
-      if (!mounted) return;
-      setState(() => _live = live);
-      debugPrint('map diagnostics: $live');
+  /// Drives pan, zoom and rotation at once — the condition the residual
+  /// transform exists for.
+  void _toggleAutoPan() {
+    if (_ticker != null) {
+      _ticker!.dispose();
+      setState(() => _ticker = null);
+      return;
     }
+    final ticker = createTicker((elapsed) {
+      final t = elapsed.inMilliseconds / 1000.0;
+      _mapController.moveAndRotate(
+        LatLng(
+          _tallinn.latitude + 0.012 * math.sin(t * 1.1),
+          _tallinn.longitude + 0.022 * math.cos(t * 0.9),
+        ),
+        13.0 + 0.6 * math.sin(t * 0.7),
+        18.0 * math.sin(t * 0.5),
+      );
+    })..start();
+    setState(() => _ticker = ticker);
+  }
+
+  @override
+  void dispose() {
+    _ticker?.dispose();
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final result = _result;
+    final stats = _diagnostics.entries
+        .where((e) => e.key.startsWith('render') || e.key == 'frameCount')
+        .map((e) => '${e.key}: ${e.value}')
+        .join('   ');
+
     return Scaffold(
-      appBar: AppBar(title: const Text('Texture probe')),
-      body: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            FilledButton(onPressed: _run, child: const Text('Run probe')),
-            const SizedBox(height: 16),
-            if (result != null) ...[
-              Text(result.ok ? 'OK' : 'FAILED: ${result.error}'),
-              const SizedBox(height: 8),
-              // A red square here means native GPU output reached Flutter's
-              // compositor. Anything else (black, blank) means it did not.
-              if (result.textureId != null)
-                SizedBox(
-                  height: 200,
-                  child: Texture(textureId: result.textureId!),
+      body: Stack(
+        children: [
+          FlutterMap(
+            mapController: _mapController,
+            options: const MapOptions(initialCenter: _tallinn, initialZoom: 13),
+            children: [
+              MapLibreBasemap(
+                styleUrl: _dark ? _darkStyle : _light,
+                onDiagnostics: (d) {
+                  if (mounted) setState(() => _diagnostics = d);
+                },
+              ),
+              MarkerLayer(
+                markers: const [
+                  Marker(
+                    point: _tallinn,
+                    width: 20,
+                    height: 20,
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: Color(0xFFFF2D55),
+                        shape: BoxShape.circle,
+                        border: Border.fromBorderSide(
+                          BorderSide(color: Colors.white, width: 3),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          SafeArea(
+            child: Align(
+              alignment: Alignment.topRight,
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Column(
+                  children: [
+                    FloatingActionButton.small(
+                      heroTag: 'theme',
+                      onPressed: () => setState(() => _dark = !_dark),
+                      child: Icon(_dark ? Icons.light_mode : Icons.dark_mode),
+                    ),
+                    const SizedBox(height: 8),
+                    FloatingActionButton.small(
+                      heroTag: 'pan',
+                      onPressed: _toggleAutoPan,
+                      child: Icon(
+                        _ticker == null ? Icons.play_arrow : Icons.pause,
+                      ),
+                    ),
+                  ],
                 ),
-              const SizedBox(height: 16),
-              Expanded(
-                child: SingleChildScrollView(
+              ),
+            ),
+          ),
+          if (stats.isNotEmpty)
+            Positioned(
+              left: 12,
+              right: 12,
+              bottom: 24,
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.72),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.all(10),
                   child: Text(
-                    {
-                      ...result.diagnostics,
-                      ..._live,
-                    }.entries.map((e) => '${e.key}: ${e.value}').join('\n'),
+                    stats,
+                    style: const TextStyle(color: Colors.white, fontSize: 12),
                   ),
                 ),
               ),
-            ],
-          ],
-        ),
+            ),
+        ],
       ),
     );
   }

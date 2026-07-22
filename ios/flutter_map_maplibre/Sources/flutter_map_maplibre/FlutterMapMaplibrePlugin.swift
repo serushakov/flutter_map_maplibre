@@ -22,6 +22,7 @@ public class FlutterMapMaplibrePlugin: NSObject, FlutterPlugin {
   }
 
   private var mapProbe: MapLibreProbe?
+  private var mapTextureId: Int64?
 
   public func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
     if call.method == "runMap" {
@@ -30,6 +31,30 @@ public class FlutterMapMaplibrePlugin: NSObject, FlutterPlugin {
     }
     if call.method == "mapDiagnostics" {
       result(mapProbe?.diagnostics ?? [String: Any]())
+      return
+    }
+    if call.method == "setStyle" {
+      let args = call.arguments as? [String: Any] ?? [:]
+      if let url = args["styleUrl"] as? String { mapProbe?.setStyle(url) }
+      result(nil)
+      return
+    }
+    if call.method == "disposeMap" {
+      mapProbe?.stop()
+      if let id = mapTextureId { textures.unregisterTexture(id) }
+      mapProbe = nil
+      mapTextureId = nil
+      result(nil)
+      return
+    }
+    if call.method == "setCamera" {
+      let args = call.arguments as? [String: Any] ?? [:]
+      mapProbe?.setCamera(
+        latitude: args["lat"] as? Double ?? 0,
+        longitude: args["lng"] as? Double ?? 0,
+        zoom: args["zoom"] as? Double ?? 13,
+        bearing: args["bearing"] as? Double ?? 0)
+      result(nil)
       return
     }
     guard call.method == "runProbe" else {
@@ -94,8 +119,13 @@ public class FlutterMapMaplibrePlugin: NSObject, FlutterPlugin {
       return
     }
 
+    // One basemap per plugin instance; replacing tears the old one down.
+    mapProbe?.stop()
+    if let old = mapTextureId { textures.unregisterTexture(old) }
+
     mapProbe = probe
     let id = textures.register(probe)
+    mapTextureId = id
     probe.start { [weak self] in
       // Every rendered frame: tell Flutter the texture changed.
       self?.textures.textureFrameAvailable(id)

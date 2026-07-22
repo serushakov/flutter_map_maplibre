@@ -24,6 +24,17 @@ NS_ASSUME_NONNULL_BEGIN
 /// Returns YES if a frame was rendered.
 - (BOOL)renderTick;
 
+/// Moves the camera. Called from Dart as the flutter_map camera changes; the
+/// residual transform on the Flutter side covers the frames of lag between
+/// this landing and the next render.
+- (void)setCameraLatitude:(double)latitude
+                longitude:(double)longitude
+                     zoom:(double)zoom
+                  bearing:(double)bearing;
+
+/// Swaps the style without tearing down the map or the render session.
+- (void)setStyleURL:(NSString *)styleURL;
+
 - (void)shutdown;
 
 @property(nonatomic, readonly) NSDictionary<NSString *, id> *diagnostics;

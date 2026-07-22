@@ -10,6 +10,11 @@ static NSMutableDictionary<NSString *, id> *gLastFailure = nil;
   mln_render_session *_session;
   NSMutableDictionary<NSString *, id> *_diagnostics;
   NSInteger _frameCount;
+  double _totalRenderMs;
+  double _maxRenderMs;
+  NSInteger _steadyFrames;
+  double _steadyRenderMs;
+  double _steadyMaxMs;
 }
 
 + (NSDictionary<NSString *, id> *)lastFailureDiagnostics {
@@ -77,6 +82,29 @@ static NSMutableDictionary<NSString *, id> *gLastFailure = nil;
   return nil;
 }
 
+- (void)setCameraLatitude:(double)latitude
+                longitude:(double)longitude
+                     zoom:(double)zoom
+                  bearing:(double)bearing {
+  if (!_map) return;
+  mln_camera_options camera = mln_camera_options_default();
+  camera.fields = MLN_CAMERA_OPTION_CENTER | MLN_CAMERA_OPTION_ZOOM |
+                  MLN_CAMERA_OPTION_BEARING;
+  camera.latitude = latitude;
+  camera.longitude = longitude;
+  camera.zoom = zoom;
+  camera.bearing = bearing;
+  mln_map_jump_to(_map, &camera);
+  mln_map_request_repaint(_map);
+}
+
+- (void)setStyleURL:(NSString *)styleURL {
+  if (!_map) return;
+  mln_status status = mln_map_set_style_url(_map, styleURL.UTF8String);
+  _diagnostics[@"setStyleStatus"] = @(status);
+  mln_map_request_repaint(_map);
+}
+
 - (BOOL)renderTick {
   if (!_runtime || !_session) return NO;
 
@@ -102,11 +130,33 @@ static NSMutableDictionary<NSString *, id> *gLastFailure = nil;
     }
   } while (hasEvent);
 
+  // render_update blocks until the GPU finishes (the FFI's texture path calls
+  // waitUntilCompleted), so this interval is CPU-record *plus* GPU-execute,
+  // not the max of the two. That is exactly the cost we want to measure.
+  CFAbsoluteTime started = CFAbsoluteTimeGetCurrent();
   mln_status status = mln_render_session_render_update(_session);
+  double elapsedMs = (CFAbsoluteTimeGetCurrent() - started) * 1000.0;
+
   _diagnostics[@"lastRenderStatus"] = @(status);
   if (status == MLN_STATUS_OK) {
     _frameCount++;
+    _totalRenderMs += elapsedMs;
+    if (elapsedMs > _maxRenderMs) _maxRenderMs = elapsedMs;
+    // Ignore the first few frames: style load and initial tile upload are not
+    // representative of steady state.
+    if (_frameCount > 30) {
+      _steadyFrames++;
+      _steadyRenderMs += elapsedMs;
+      if (elapsedMs > _steadyMaxMs) _steadyMaxMs = elapsedMs;
+    }
     _diagnostics[@"frameCount"] = @(_frameCount);
+    _diagnostics[@"renderMsLast"] = @(round(elapsedMs * 100) / 100);
+    _diagnostics[@"renderMsMax"] = @(round(_maxRenderMs * 100) / 100);
+    if (_steadyFrames > 0) {
+      _diagnostics[@"renderMsAvgSteady"] =
+          @(round(_steadyRenderMs / _steadyFrames * 100) / 100);
+      _diagnostics[@"renderMsMaxSteady"] = @(round(_steadyMaxMs * 100) / 100);
+    }
     return YES;
   }
   return NO;

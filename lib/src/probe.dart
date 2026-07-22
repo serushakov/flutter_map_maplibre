@@ -87,6 +87,26 @@ class TextureProbe {
     }
   }
 
+  /// Pushes the camera to the native renderer. The renderer is always a frame
+  /// or two behind; [residualTransform] closes that gap on the Flutter side.
+  Future<void> setCamera({
+    required double lat,
+    required double lng,
+    required double zoom,
+    required double bearing,
+  }) async {
+    try {
+      await channel.invokeMethod<void>('setCamera', <String, Object?>{
+        'lat': lat,
+        'lng': lng,
+        'zoom': zoom,
+        'bearing': bearing,
+      });
+    } on PlatformException {
+      // Spike: a dropped camera push just means one stale frame.
+    }
+  }
+
   /// Live diagnostics from a running map probe (frame count, load errors).
   Future<Map<String, Object?>> mapDiagnostics() async {
     final response = await channel.invokeMapMethod<String, Object?>(
