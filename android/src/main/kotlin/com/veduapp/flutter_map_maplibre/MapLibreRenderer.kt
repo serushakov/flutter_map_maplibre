@@ -55,11 +55,19 @@ internal class MapLibreRenderer(
         if (handle != 0L) MlnNative.nativeSetStyle(handle, styleUrl)
     }
 
-    fun diagnostics(): Map<String, Any?> = mapOf(
-        "frameCount" to if (handle != 0L) MlnNative.nativeFrameCount(handle) else 0,
-        "backend" to "opengl-egl",
-        "swapped" to if (handle != 0L) MlnNative.nativeSwapped(handle) else -2
-    )
+    fun diagnostics(): Map<String, Any?> = if (handle == 0L) {
+        mapOf("backend" to "opengl-egl-borrowed-texture", "frameCount" to 0)
+    } else {
+        mapOf(
+            "frameCount" to MlnNative.nativeFrameCount(handle),
+            "backend" to "opengl-egl-borrowed-texture",
+            "swapped" to MlnNative.nativeSwapped(handle),
+            "attachStatus" to MlnNative.nativeAttachStatus(handle),
+            "glError" to MlnNative.nativeGlError(handle),
+            "styleLoaded" to MlnNative.nativeStyleLoaded(handle),
+            "lastEvent" to MlnNative.nativeLastEvent(handle)
+        )
+    }
 
     fun destroy() {
         running = false

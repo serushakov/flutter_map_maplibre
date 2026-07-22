@@ -94,6 +94,20 @@ kotlin {
 }
 
 dependencies {
+    // Provides org.rustls.platformverifier.CertificateVerifier, which the Rust
+    // HTTP stack calls through JNI to validate TLS against the platform trust
+    // store. Without it every handshake fails and the style silently never
+    // loads — the map renders nothing and reports no error.
+    //
+    // rustls-platform-verifier ships this only as an AAR inside the Rust crate,
+    // never published to Maven Central. Consuming that AAR would force every
+    // host app to declare a custom repository, because Gradle resolves a
+    // library's POM dependencies in the *app's* context. The AAR holds nothing
+    // but a 9K classes.jar (no resources, no transitive deps), so the jar is
+    // vendored directly: local file deps are packaged into the consuming APK
+    // with no host configuration at all.
+    implementation(files("prebuilt/rustls-platform-verifier-0.1.1.jar"))
+
     testImplementation("org.jetbrains.kotlin:kotlin-test")
     testImplementation("org.mockito:mockito-core:5.0.0")
 }

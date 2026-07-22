@@ -43,5 +43,14 @@ internal object MlnNative {
 
     external fun nativeSwapped(handle: Long): Int
 
+    external fun nativeAttachStatus(handle: Long): Int
+
+    external fun nativeGlError(handle: Long): Int
+
+    external fun nativeStyleLoaded(handle: Long): Boolean
+
+    /** Message from the last loading/render failure, or null if none. */
+    external fun nativeLastEvent(handle: Long): String?
+
     external fun nativeDestroy(handle: Long)
 }
