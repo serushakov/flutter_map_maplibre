@@ -18,7 +18,9 @@ static NSMutableDictionary<NSString *, id> *gLastFailure = nil;
   BOOL _updateAvailable;
   NSInteger _updatesAvailable;
   NSInteger _idleEvents;
-  NSInteger _rendersWithoutUpdate;
+  NSInteger _linkRenders;
+  NSInteger _skippedTicks;
+  NSInteger _cameraRenders;
   BOOL _needsRepaint;
   int64_t _nativeFrames;
   int64_t _drawCalls;
@@ -112,18 +114,13 @@ static NSMutableDictionary<NSString *, id> *gLastFailure = nil;
   mln_map_request_repaint(_map);
 }
 
-- (BOOL)renderTick {
-  if (!_runtime || !_session) return NO;
-
+/// Pumps the runtime and drains its event queue into flags and counters.
+/// `_updateAvailable` is sticky: set here, cleared only by a successful
+/// render. Making it per-tick (the old behaviour) would lose updates that
+/// arrive while a render is skipped.
+- (void)pumpEvents {
   mln_runtime_run_once(_runtime);
 
-  // Drain the queue. MapLibre reports MLN_RUNTIME_EVENT_MAP_RENDER_UPDATE_
-  // AVAILABLE when a render would actually produce something new; the header
-  // says to process the update only then. This still renders every tick, but
-  // counts how often it did so with no update pending — `rendersWithoutUpdate`
-  // is the wasted GPU work, and on an idle map it should be the whole tick
-  // rate. Measuring before gating: if the event turns out not to fire as
-  // documented, gating on it would silently freeze the map.
   mln_runtime_event event;
   memset(&event, 0, sizeof(event));
   event.size = (uint32_t)sizeof(event);
@@ -171,46 +168,66 @@ static NSMutableDictionary<NSString *, id> *gLastFailure = nil;
     }
   } while (hasEvent);
 
-  if (!_updateAvailable) _rendersWithoutUpdate++;
-  _updateAvailable = NO;
-
   _diagnostics[@"updatesAvailable"] = @(_updatesAvailable);
   _diagnostics[@"idleEvents"] = @(_idleEvents);
-  _diagnostics[@"rendersWithoutUpdate"] = @(_rendersWithoutUpdate);
   _diagnostics[@"needsRepaint"] = @(_needsRepaint);
   _diagnostics[@"nativeFrames"] = @(_nativeFrames);
   _diagnostics[@"drawCalls"] = @(_drawCalls);
+}
 
-  // render_update blocks until the GPU finishes (the FFI's texture path calls
-  // waitUntilCompleted), so this interval is CPU-record *plus* GPU-execute,
-  // not the max of the two. That is exactly the cost we want to measure.
+/// Renders one frame and records timing stats. Returns YES on success.
+/// render_update blocks until the GPU finishes (the FFI's texture path calls
+/// waitUntilCompleted), so this interval is CPU-record *plus* GPU-execute.
+- (BOOL)renderNow {
   CFAbsoluteTime started = CFAbsoluteTimeGetCurrent();
   mln_status status = mln_render_session_render_update(_session);
   double elapsedMs = (CFAbsoluteTimeGetCurrent() - started) * 1000.0;
 
   _diagnostics[@"lastRenderStatus"] = @(status);
-  if (status == MLN_STATUS_OK) {
-    _frameCount++;
-    _totalRenderMs += elapsedMs;
-    if (elapsedMs > _maxRenderMs) _maxRenderMs = elapsedMs;
-    // Ignore the first few frames: style load and initial tile upload are not
-    // representative of steady state.
-    if (_frameCount > 30) {
-      _steadyFrames++;
-      _steadyRenderMs += elapsedMs;
-      if (elapsedMs > _steadyMaxMs) _steadyMaxMs = elapsedMs;
-    }
-    _diagnostics[@"frameCount"] = @(_frameCount);
-    _diagnostics[@"renderMsLast"] = @(round(elapsedMs * 100) / 100);
-    _diagnostics[@"renderMsMax"] = @(round(_maxRenderMs * 100) / 100);
-    if (_steadyFrames > 0) {
-      _diagnostics[@"renderMsAvgSteady"] =
-          @(round(_steadyRenderMs / _steadyFrames * 100) / 100);
-      _diagnostics[@"renderMsMaxSteady"] = @(round(_steadyMaxMs * 100) / 100);
-    }
-    return YES;
+  if (status != MLN_STATUS_OK) return NO;
+
+  _updateAvailable = NO;
+  _frameCount++;
+  _totalRenderMs += elapsedMs;
+  if (elapsedMs > _maxRenderMs) _maxRenderMs = elapsedMs;
+  // Ignore the first few frames: style load and initial tile upload are not
+  // representative of steady state.
+  if (_frameCount > 30) {
+    _steadyFrames++;
+    _steadyRenderMs += elapsedMs;
+    if (elapsedMs > _steadyMaxMs) _steadyMaxMs = elapsedMs;
   }
-  return NO;
+  _diagnostics[@"frameCount"] = @(_frameCount);
+  _diagnostics[@"renderMsLast"] = @(round(elapsedMs * 100) / 100);
+  _diagnostics[@"renderMsMax"] = @(round(_maxRenderMs * 100) / 100);
+  if (_steadyFrames > 0) {
+    _diagnostics[@"renderMsAvgSteady"] =
+        @(round(_steadyRenderMs / _steadyFrames * 100) / 100);
+    _diagnostics[@"renderMsMaxSteady"] = @(round(_steadyMaxMs * 100) / 100);
+  }
+  return YES;
+}
+
+- (BOOL)renderTick {
+  if (!_runtime || !_session) return NO;
+  [self pumpEvents];
+
+  // The gate. An idle map produces no update events and no repaint request,
+  // so a stationary map renders zero frames instead of 120/sec. Fallback if
+  // the events prove dishonest on device (spec §2): drop `_updateAvailable`
+  // from the condition and gate on `_needsRepaint` alone.
+  if (!_updateAvailable && !_needsRepaint) {
+    _skippedTicks++;
+    _diagnostics[@"skippedTicks"] = @(_skippedTicks);
+    return NO;
+  }
+
+  BOOL rendered = [self renderNow];
+  if (rendered) {
+    _linkRenders++;
+    _diagnostics[@"linkRenders"] = @(_linkRenders);
+  }
+  return rendered;
 }
 
 - (void)shutdown {

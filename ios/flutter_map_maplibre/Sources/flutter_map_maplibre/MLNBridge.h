@@ -20,8 +20,9 @@ NS_ASSUME_NONNULL_BEGIN
                               styleURL:(NSString *)styleURL
                                texture:(id<MTLTexture>)texture;
 
-/// Pumps the run loop, drains events, renders one frame.
-/// Returns YES if a frame was rendered.
+/// Pumps the run loop and renders one frame — but only when MapLibre reported
+/// new content (tile arrival, fade animation, repaint request). An idle map
+/// skips the render entirely. Returns YES if a frame was rendered.
 - (BOOL)renderTick;
 
 /// Moves the camera. Called from Dart as the flutter_map camera changes; the
