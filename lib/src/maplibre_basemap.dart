@@ -1,10 +1,11 @@
 import 'dart:async';
 
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_map/flutter_map.dart';
 
-import 'camera_conventions.dart';
-import 'ffi/ffi_probe.dart';
+import 'basemap_renderer.dart';
+import 'ffi/ffi_basemap_renderer.dart';
 import 'maplibre_channel.dart';
 import 'residual_transform.dart';
 
@@ -24,11 +25,12 @@ import 'residual_transform.dart';
 /// )
 /// ```
 ///
-/// The camera stays owned by `flutter_map`. Camera changes are pushed to the
-/// native renderer, which renders each pushed camera before acknowledging it;
-/// the remaining sub-frame gap is closed every Flutter frame by
-/// [residualTransform], so the basemap stays pinned to the layers drawn above
-/// it instead of sliding against them.
+/// The camera stays owned by `flutter_map`. Each build renders the frame
+/// synchronously via dart:ffi before returning, so the texture content
+/// matches the camera by construction and the basemap draws at identity —
+/// no estimation, no stamping. The residual transform survives only as the
+/// failure fallback, correcting against the renderer's ground-truth
+/// [BasemapRenderer.lastRenderedCamera].
 class MapLibreBasemap extends StatefulWidget {
   const MapLibreBasemap({
     super.key,
@@ -36,97 +38,83 @@ class MapLibreBasemap extends StatefulWidget {
     this.onDiagnostics,
     this.applyResidualTransform = true,
     this.overRenderFactor = 1.0,
+    this.rendererFactory,
   }) : assert(overRenderFactor >= 1.0);
 
   /// MapLibre style JSON URL. Changing it swaps the style in place without
-  /// tearing down the renderer, which is what makes light/dark switching cheap.
+  /// tearing down the renderer, which is what makes light/dark switching
+  /// cheap.
   final String styleUrl;
 
-  /// Periodic render statistics, for callers that want to surface or log them.
+  /// Periodic render statistics, for callers that want to surface or log
+  /// them.
   final ValueChanged<Map<String, Object?>>? onDiagnostics;
 
-  /// Escape hatch for debugging: with this false the rendered frame is drawn
-  /// uncorrected, so the lag between the native renderer and the live camera
-  /// becomes visible. Never disable in production.
+  /// Escape hatch for debugging: with this false a failed render is drawn
+  /// uncorrected. Never disable in production.
   final bool applyResidualTransform;
 
-  /// How much larger than the viewport to render, per axis.
-  ///
-  /// The renderer is always a little behind the live camera, so a stale frame
-  /// only has pixels where it was drawn. When the camera *zooms out*, the
-  /// residual transform shrinks that frame (scale < 1) and a bare ring appears
-  /// around every edge; a pan bares one leading edge. Rendering a margin gives
-  /// the transform material to pull into view instead of blank space.
-  ///
-  /// A factor `F` covers a zoom-out lag of up to `log2(F)` zoom levels and a
-  /// pan lag of `(F - 1) / 2` of the viewport per side. The cost is `F * F`
-  /// times the fill every frame, paid whether or not the camera is moving —
-  /// so this trades constant GPU work for the absence of a transient artefact.
-  /// 1.0 (the default) renders exactly the viewport and leaves the edges bare;
-  /// reducing latency is the cheaper lever and shrinks the margin this needs.
+  /// How much larger than the viewport to render, per axis. With the
+  /// same-frame render the texture is never behind the camera on the happy
+  /// path, so 1.0 (exact viewport) is the expected value; the margin only
+  /// papers over failure frames.
   final double overRenderFactor;
+
+  /// Test seam: build the renderer. Defaults to the FFI implementation.
+  final BasemapRenderer Function()? rendererFactory;
 
   @override
   State<MapLibreBasemap> createState() => _MapLibreBasemapState();
 }
 
-class _MapLibreBasemapState extends State<MapLibreBasemap> {
+class _MapLibreBasemapState extends State<MapLibreBasemap>
+    with SingleTickerProviderStateMixin {
   final _channel = MapLibreChannel();
+  late final BasemapRenderer _renderer =
+      (widget.rendererFactory ?? FfiBasemapRenderer.new)();
 
   int? _textureId;
 
-  /// The viewport size the current session was created for (unenlarged). Drives
-  /// the recreate decision, so it is compared against the raw layout size.
+  /// The viewport size the current session was created for (unenlarged).
   Size? _viewportSize;
 
-  /// The size the texture is actually rendered at: [_viewportSize] scaled by
-  /// [MapLibreBasemap.overRenderFactor]. Drives the residual transform and the
-  /// texture layout, so the margin lands centred on the viewport.
+  /// [_viewportSize] scaled by [MapLibreBasemap.overRenderFactor]; what the
+  /// texture is actually rendered at.
   Size? _renderSize;
 
-  /// The camera the texture is showing at composite time, as best this side
-  /// can know it: stamped when a push is *sent* (the handler renders before
-  /// replying, so the frame usually lands before this Flutter frame is
-  /// rasterized) and rolled back if the reply says the render failed.
-  MapCamera? _rendered;
-
-  /// Newest camera seen while a push was in flight, sent once it resolves.
-  MapCamera? _pendingCamera;
-
-  bool _pushInFlight = false;
+  Ticker? _ticker;
   bool _creating = false;
   Timer? _diagnosticsTimer;
-
-  /// Exponential moving average of _pushCamera call → reply, in ms — the
-  /// pipeline latency the residual transform has to absorb, as a number.
-  double? _pushToTextureMs;
 
   @override
   void didUpdateWidget(MapLibreBasemap oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.styleUrl != widget.styleUrl && _textureId != null) {
-      _channel.setStyle(widget.styleUrl);
+    if (oldWidget.styleUrl != widget.styleUrl) {
+      _renderer.setStyle(widget.styleUrl);
     }
   }
 
   @override
   void dispose() {
+    _ticker?.dispose();
     _diagnosticsTimer?.cancel();
-    _channel.dispose();
+    _renderer.dispose();
+    _channel.disposeTextures();
     super.dispose();
   }
 
-  /// Only polls while a caller is listening — no cost otherwise.
+  /// Ticker: lets the map animate itself (tile fades, transitions) between
+  /// camera changes. When a tick presents a new frame the widget rebuilds so
+  /// the transform stays true to the new content.
+  void _onTick(Duration _) {
+    if (_renderer.tick() && mounted) setState(() {});
+  }
+
   void _startDiagnosticsPolling() {
     if (widget.onDiagnostics == null || _diagnosticsTimer != null) return;
-    _diagnosticsTimer = Timer.periodic(const Duration(seconds: 1), (_) async {
-      final diagnostics = await _channel.diagnostics();
+    _diagnosticsTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (!mounted) return;
-      widget.onDiagnostics?.call(<String, Object?>{
-        ...diagnostics,
-        if (_pushToTextureMs != null)
-          'pushToTextureMs': double.parse(_pushToTextureMs!.toStringAsFixed(2)),
-      });
+      widget.onDiagnostics?.call(_renderer.diagnostics());
     });
   }
 
@@ -134,109 +122,52 @@ class _MapLibreBasemapState extends State<MapLibreBasemap> {
     if (_creating) return;
     _creating = true;
 
-    // Temporary (removed with the widget rewrite): FFI symbol probe, read
-    // from the device log as MLNFFI.
-    debugPrint('MLNFFI probe: ${probeMaplibreFfi()}');
+    // Resize path: the borrowed-texture session cannot be resized in place.
+    if (_textureId != null) {
+      _renderer.dispose();
+      await _channel.disposeTextures();
+      _textureId = null;
+    }
 
-    // Render a margin around the viewport so a zoom-out (which shrinks the
-    // frame) has material to pull in from the edges instead of blank space.
     final factor = widget.overRenderFactor;
     final renderSize = Size(viewport.width * factor, viewport.height * factor);
 
-    final result = await _channel.create(
+    final result = await _channel.createTextures(
+      width: renderSize.width.round(),
+      height: renderSize.height.round(),
+      scale: devicePixelRatio,
+    );
+    if (!mounted ||
+        !result.ok ||
+        result.textureId == null ||
+        result.backTextureAddress == null) {
+      widget.onDiagnostics?.call(result.diagnostics);
+      _creating = false;
+      return;
+    }
+
+    final created = _renderer.create(
+      backTextureAddress: result.backTextureAddress!,
+      presenterId: result.textureId!,
       width: renderSize.width.round(),
       height: renderSize.height.round(),
       scale: devicePixelRatio,
       styleUrl: widget.styleUrl,
     );
+    if (!created) {
+      widget.onDiagnostics?.call(_renderer.diagnostics());
+      _creating = false;
+      return;
+    }
 
-    if (!mounted) return;
     setState(() {
       _textureId = result.textureId;
       _viewportSize = viewport;
       _renderSize = renderSize;
     });
-
-    widget.onDiagnostics?.call(result.diagnostics);
+    _ticker ??= createTicker(_onTick)..start();
     _startDiagnosticsPolling();
-  }
-
-  /// True when the native renderer is already showing this exact camera, so
-  /// pushing it again would be pure cost.
-  static bool _sameCamera(MapCamera? a, MapCamera b) =>
-      a != null &&
-      a.center.latitude == b.center.latitude &&
-      a.center.longitude == b.center.longitude &&
-      a.zoom == b.zoom &&
-      a.rotation == b.rotation;
-
-  /// Pushes [camera] to the renderer, at most one call in flight.
-  ///
-  /// The early return on an unchanged camera is what makes the widget settle.
-  /// A completed push can trigger another via the pending queue — so without
-  /// a stopping condition an idle map drives a permanent loop of channel
-  /// round-trips.
-  ///
-  /// `_rendered` is stamped at *send* time, not on reply. The native side
-  /// renders the frame inside the handler, so by the time this Flutter frame
-  /// is composited the texture almost always shows [camera] already —
-  /// stamping on reply instead makes the transform assume a one-frame-older
-  /// camera than the texture actually shows, and that error flips sign as
-  /// the reply timing drifts across the frame boundary. On device the
-  /// oscillation reads as stutter (worst at 60Hz), where the send-time
-  /// stamp's occasional one-sided lag is invisible. A failed render rolls
-  /// the stamp back so the transform stays true to the unchanged texture.
-  ///
-  /// Called from build; mutates `_rendered` directly (no setState) so the
-  /// frame being built uses the stamped value. Only the failure rollback
-  /// needs a rebuild, and that path is async.
-  void _pushCamera(MapCamera camera) {
-    if (_textureId == null) return;
-    if (_sameCamera(_rendered, camera)) return;
-
-    // Mid-gesture the camera moves again before the previous push resolves.
-    // Hold the newest and send it on completion: dropping it would leave the
-    // texture rendered for a slightly stale camera once the gesture ends, and
-    // nothing would rebuild to correct it.
-    if (_pushInFlight) {
-      _pendingCamera = camera;
-      return;
-    }
-
-    _pushInFlight = true;
-    final previous = _rendered;
-    _rendered = camera;
-    final pushClock = Stopwatch()..start();
-    _channel
-        .setCamera(
-          lat: camera.center.latitude,
-          lng: camera.center.longitude,
-          zoom: maplibreZoom(camera.zoom),
-          bearing: maplibreBearing(camera.rotation),
-        )
-        .then((rendered) {
-          _pushInFlight = false;
-          if (!mounted) return;
-
-          if (rendered) {
-            final ms = pushClock.elapsedMicroseconds / 1000.0;
-            _pushToTextureMs = _pushToTextureMs == null
-                ? ms
-                : _pushToTextureMs! * 0.8 + ms * 0.2;
-          } else if (_sameCamera(_rendered, camera)) {
-            // The render failed and nothing newer was stamped meanwhile: the
-            // texture still shows the pre-push frame, so tell the transform
-            // the truth. The next camera change re-pushes via the sameCamera
-            // guard now failing against [previous].
-            setState(() => _rendered = previous);
-          }
-
-          final pending = _pendingCamera;
-          _pendingCamera = null;
-          if (pending != null && !_sameCamera(camera, pending)) {
-            _pushCamera(pending);
-          }
-        });
+    _creating = false;
   }
 
   @override
@@ -248,10 +179,8 @@ class _MapLibreBasemapState extends State<MapLibreBasemap> {
         final size = constraints.biggest;
         final devicePixelRatio = MediaQuery.devicePixelRatioOf(context);
 
-        // The borrowed-texture session cannot be resized in place, so a size
-        // change means creating a new one. Sizes churn every frame while a
-        // bottom sheet drags, hence the tolerance. Compared against the
-        // unenlarged viewport, since that is what `size` is.
+        // Sizes churn every frame while a bottom sheet drags, hence the
+        // tolerance. Compared against the unenlarged viewport.
         final current = _viewportSize;
         final needsCreate =
             current == null ||
@@ -271,26 +200,25 @@ class _MapLibreBasemapState extends State<MapLibreBasemap> {
           return const SizedBox.shrink();
         }
 
-        // Push during build, not post-frame: flutter_map rebuilds this widget
-        // in the same frame the gesture moves the camera, so pushing here
-        // starts the native render a full frame earlier. Before reading
-        // `_rendered`, because the push stamps it (send-time stamping) and
-        // this frame's transform must use the stamped value.
-        _pushCamera(camera);
-        final rendered = _rendered;
+        // The same-frame render: by the time this build returns, the front
+        // buffer shows [camera] (on success). No stamp, no estimate.
+        final rendered = _renderer.render(camera);
+        final shown = _renderer.lastRenderedCamera;
 
-        // Draw the texture from the first frame. Waiting for the first camera
-        // push to resolve means a failed/slow push hides the map entirely,
-        // which is indistinguishable from the renderer not working.
-        final renderedOrCurrent = rendered ?? camera;
+        // First frame before any successful render: draw uncorrected rather
+        // than hide the map (a hidden map is indistinguishable from a broken
+        // renderer).
+        final transform = (rendered || shown == null)
+            ? Matrix4.identity()
+            : widget.applyResidualTransform
+            ? residualTransform(
+                rendered: shown.withNonRotatedSize(renderSize),
+                current: camera,
+              )
+            : Matrix4.identity();
 
         return Transform(
-          transform: widget.applyResidualTransform
-              ? residualTransform(
-                  rendered: renderedOrCurrent.withNonRotatedSize(renderSize),
-                  current: camera,
-                )
-              : Matrix4.identity(),
+          transform: transform,
           alignment: Alignment.topLeft,
           child: OverflowBox(
             alignment: Alignment.topLeft,
