@@ -33,7 +33,8 @@ class MapLibreBasemap extends StatefulWidget {
     required this.styleUrl,
     this.onDiagnostics,
     this.applyResidualTransform = true,
-  });
+    this.overRenderFactor = 1.0,
+  }) : assert(overRenderFactor >= 1.0);
 
   /// MapLibre style JSON URL. Changing it swaps the style in place without
   /// tearing down the renderer, which is what makes light/dark switching cheap.
@@ -47,6 +48,22 @@ class MapLibreBasemap extends StatefulWidget {
   /// becomes visible. Never disable in production.
   final bool applyResidualTransform;
 
+  /// How much larger than the viewport to render, per axis.
+  ///
+  /// The renderer is always a little behind the live camera, so a stale frame
+  /// only has pixels where it was drawn. When the camera *zooms out*, the
+  /// residual transform shrinks that frame (scale < 1) and a bare ring appears
+  /// around every edge; a pan bares one leading edge. Rendering a margin gives
+  /// the transform material to pull into view instead of blank space.
+  ///
+  /// A factor `F` covers a zoom-out lag of up to `log2(F)` zoom levels and a
+  /// pan lag of `(F - 1) / 2` of the viewport per side. The cost is `F * F`
+  /// times the fill every frame, paid whether or not the camera is moving —
+  /// so this trades constant GPU work for the absence of a transient artefact.
+  /// 1.0 (the default) renders exactly the viewport and leaves the edges bare;
+  /// reducing latency is the cheaper lever and shrinks the margin this needs.
+  final double overRenderFactor;
+
   @override
   State<MapLibreBasemap> createState() => _MapLibreBasemapState();
 }
@@ -55,6 +72,14 @@ class _MapLibreBasemapState extends State<MapLibreBasemap> {
   final _channel = MapLibreChannel();
 
   int? _textureId;
+
+  /// The viewport size the current session was created for (unenlarged). Drives
+  /// the recreate decision, so it is compared against the raw layout size.
+  Size? _viewportSize;
+
+  /// The size the texture is actually rendered at: [_viewportSize] scaled by
+  /// [MapLibreBasemap.overRenderFactor]. Drives the residual transform and the
+  /// texture layout, so the margin lands centred on the viewport.
   Size? _renderSize;
 
   /// The camera most recently pushed to the native renderer, treated as the
@@ -93,13 +118,18 @@ class _MapLibreBasemapState extends State<MapLibreBasemap> {
     });
   }
 
-  Future<void> _create(Size size, double devicePixelRatio) async {
+  Future<void> _create(Size viewport, double devicePixelRatio) async {
     if (_creating) return;
     _creating = true;
 
+    // Render a margin around the viewport so a zoom-out (which shrinks the
+    // frame) has material to pull in from the edges instead of blank space.
+    final factor = widget.overRenderFactor;
+    final renderSize = Size(viewport.width * factor, viewport.height * factor);
+
     final result = await _channel.create(
-      width: size.width.round(),
-      height: size.height.round(),
+      width: renderSize.width.round(),
+      height: renderSize.height.round(),
       scale: devicePixelRatio,
       styleUrl: widget.styleUrl,
     );
@@ -107,7 +137,8 @@ class _MapLibreBasemapState extends State<MapLibreBasemap> {
     if (!mounted) return;
     setState(() {
       _textureId = result.textureId;
-      _renderSize = size;
+      _viewportSize = viewport;
+      _renderSize = renderSize;
     });
 
     widget.onDiagnostics?.call(result.diagnostics);
@@ -176,8 +207,9 @@ class _MapLibreBasemapState extends State<MapLibreBasemap> {
 
         // The borrowed-texture session cannot be resized in place, so a size
         // change means creating a new one. Sizes churn every frame while a
-        // bottom sheet drags, hence the tolerance.
-        final current = _renderSize;
+        // bottom sheet drags, hence the tolerance. Compared against the
+        // unenlarged viewport, since that is what `size` is.
+        final current = _viewportSize;
         final needsCreate =
             current == null ||
             (current.width - size.width).abs() > 1 ||
