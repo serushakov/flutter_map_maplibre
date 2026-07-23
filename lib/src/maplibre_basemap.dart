@@ -24,9 +24,10 @@ import 'residual_transform.dart';
 /// ```
 ///
 /// The camera stays owned by `flutter_map`. Camera changes are pushed to the
-/// native renderer, which is always at least a frame behind; that gap is closed
-/// every Flutter frame by [residualTransform], so the basemap stays pinned to
-/// the layers drawn above it instead of sliding against them.
+/// native renderer, which renders each pushed camera before acknowledging it;
+/// the remaining sub-frame gap is closed every Flutter frame by
+/// [residualTransform], so the basemap stays pinned to the layers drawn above
+/// it instead of sliding against them.
 class MapLibreBasemap extends StatefulWidget {
   const MapLibreBasemap({
     super.key,
@@ -83,8 +84,8 @@ class _MapLibreBasemapState extends State<MapLibreBasemap> {
   Size? _renderSize;
 
   /// The camera most recently pushed to the native renderer, treated as the
-  /// camera the current texture contents were rendered with. True within a
-  /// frame or two — exactly what the residual transform absorbs.
+  /// camera the current texture contents were rendered with. Stamped only
+  /// when the native side confirms the frame for it is in the texture.
   MapCamera? _rendered;
 
   /// Newest camera seen while a push was in flight, sent once it resolves.
@@ -93,6 +94,10 @@ class _MapLibreBasemapState extends State<MapLibreBasemap> {
   bool _pushInFlight = false;
   bool _creating = false;
   Timer? _diagnosticsTimer;
+
+  /// Exponential moving average of _pushCamera call → reply, in ms — the
+  /// pipeline latency the residual transform has to absorb, as a number.
+  double? _pushToTextureMs;
 
   @override
   void didUpdateWidget(MapLibreBasemap oldWidget) {
@@ -114,7 +119,12 @@ class _MapLibreBasemapState extends State<MapLibreBasemap> {
     if (widget.onDiagnostics == null || _diagnosticsTimer != null) return;
     _diagnosticsTimer = Timer.periodic(const Duration(seconds: 1), (_) async {
       final diagnostics = await _channel.diagnostics();
-      if (mounted) widget.onDiagnostics?.call(diagnostics);
+      if (!mounted) return;
+      widget.onDiagnostics?.call(<String, Object?>{
+        ...diagnostics,
+        if (_pushToTextureMs != null)
+          'pushToTextureMs': double.parse(_pushToTextureMs!.toStringAsFixed(2)),
+      });
     });
   }
 
@@ -157,10 +167,16 @@ class _MapLibreBasemapState extends State<MapLibreBasemap> {
   /// Pushes [camera] to the renderer, at most one call in flight.
   ///
   /// The early return on an unchanged camera is what makes the widget settle.
-  /// Completing a push calls `setState`, which rebuilds, which schedules the
-  /// next push — so without a stopping condition an idle map drives a
-  /// permanent loop of channel round-trips, each one telling MapLibre via
-  /// `mln_map_request_repaint` that the map is dirty when nothing moved.
+  /// Completing a push calls `setState`, which rebuilds, which pushes again —
+  /// so without a stopping condition an idle map drives a permanent loop of
+  /// channel round-trips.
+  ///
+  /// The native side renders the frame *before* replying, so a `true` result
+  /// means the texture now shows exactly [camera] — stamping `_rendered` here
+  /// is honest. On `false` the texture is unchanged and `_rendered` must stay
+  /// put: the transform then keeps correcting relative to what is actually
+  /// on screen, and the next camera change (or the animation-driven display
+  /// link) repairs the content.
   void _pushCamera(MapCamera camera) {
     if (_textureId == null) return;
     if (_sameCamera(_rendered, camera)) return;
@@ -168,14 +184,14 @@ class _MapLibreBasemapState extends State<MapLibreBasemap> {
     // Mid-gesture the camera moves again before the previous push resolves.
     // Hold the newest and send it on completion: dropping it would leave the
     // texture rendered for a slightly stale camera once the gesture ends, and
-    // nothing would rebuild to correct it. The residual transform keeps that
-    // placed correctly, but it would be visibly rendered for the wrong zoom.
+    // nothing would rebuild to correct it.
     if (_pushInFlight) {
       _pendingCamera = camera;
       return;
     }
 
     _pushInFlight = true;
+    final pushClock = Stopwatch()..start();
     _channel
         .setCamera(
           lat: camera.center.latitude,
@@ -183,10 +199,17 @@ class _MapLibreBasemapState extends State<MapLibreBasemap> {
           zoom: maplibreZoom(camera.zoom),
           bearing: maplibreBearing(camera.rotation),
         )
-        .whenComplete(() {
+        .then((rendered) {
           _pushInFlight = false;
           if (!mounted) return;
-          setState(() => _rendered = camera);
+
+          if (rendered) {
+            final ms = pushClock.elapsedMicroseconds / 1000.0;
+            _pushToTextureMs = _pushToTextureMs == null
+                ? ms
+                : _pushToTextureMs! * 0.8 + ms * 0.2;
+            setState(() => _rendered = camera);
+          }
 
           final pending = _pendingCamera;
           _pendingCamera = null;
@@ -229,9 +252,12 @@ class _MapLibreBasemapState extends State<MapLibreBasemap> {
           return const SizedBox.shrink();
         }
 
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted) _pushCamera(camera);
-        });
+        // Push during build, not post-frame: flutter_map rebuilds this widget
+        // in the same frame the gesture moves the camera, so pushing here
+        // starts the native render a full frame earlier. The send is
+        // fire-and-forget async — its setState happens on reply, never
+        // during this build.
+        _pushCamera(camera);
 
         // Draw the texture from the first frame. Waiting for the first camera
         // push to resolve means a failed/slow push hides the map entirely,
