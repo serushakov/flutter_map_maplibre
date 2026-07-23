@@ -101,6 +101,8 @@ class _MapLibreBasemapState extends State<MapLibreBasemap>
   Size? _renderSize;
 
   Ticker? _ticker;
+  Timer? _insurancePump;
+  int _parks = 0;
   bool _creating = false;
   Timer? _diagnosticsTimer;
 
@@ -109,6 +111,7 @@ class _MapLibreBasemapState extends State<MapLibreBasemap>
     super.didUpdateWidget(oldWidget);
     if (oldWidget.styleUrl != widget.styleUrl) {
       _renderer.setStyle(widget.styleUrl);
+      _wake();
     }
   }
 
@@ -118,6 +121,7 @@ class _MapLibreBasemapState extends State<MapLibreBasemap>
       'MLNDISPOSE state=${identityHashCode(this)} textureId=$_textureId',
     );
     _ticker?.dispose();
+    _insurancePump?.cancel();
     _diagnosticsTimer?.cancel();
     _renderer.dispose();
     _channel.disposeTextures();
@@ -126,16 +130,44 @@ class _MapLibreBasemapState extends State<MapLibreBasemap>
 
   /// Ticker: lets the map animate itself (tile fades, transitions) between
   /// camera changes. When a tick presents a new frame the widget rebuilds so
-  /// the transform stays true to the new content.
+  /// the transform stays true to the new content. When the renderer reports
+  /// the map idle the ticker parks — an active Ticker forces the whole app
+  /// pipeline to run at display rate even when every tick is a no-op.
   void _onTick(Duration _) {
     if (_renderer.tick() && mounted) setState(() {});
+    if (_renderer.canSleep) _park();
+  }
+
+  /// Stop requesting frames and fall back to the slow insurance pump. The
+  /// pump drives owner-thread tasks (tile expiry refreshes) that would
+  /// otherwise freeze while parked, and wakes the ticker if work appears.
+  void _park() {
+    final ticker = _ticker;
+    if (ticker == null || !ticker.isActive) return;
+    ticker.stop();
+    _parks++;
+    _insurancePump ??= Timer.periodic(const Duration(seconds: 5), (_) {
+      if (mounted && _renderer.pumpWork()) _wake();
+    });
+  }
+
+  /// Idempotent: restart the ticker and drop the insurance pump.
+  void _wake() {
+    _insurancePump?.cancel();
+    _insurancePump = null;
+    final ticker = _ticker;
+    if (ticker != null && !ticker.isActive) ticker.start();
   }
 
   void _startDiagnosticsPolling() {
     if (widget.onDiagnostics == null || _diagnosticsTimer != null) return;
     _diagnosticsTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (!mounted) return;
-      widget.onDiagnostics?.call(_renderer.diagnostics());
+      widget.onDiagnostics?.call(<String, Object?>{
+        ..._renderer.diagnostics(),
+        'tickerActive': _ticker?.isActive ?? false,
+        'parks': _parks,
+      });
     });
   }
 
@@ -217,7 +249,8 @@ class _MapLibreBasemapState extends State<MapLibreBasemap>
       _viewportSize = viewport;
       _renderSize = renderSize;
     });
-    _ticker ??= createTicker(_onTick)..start();
+    _ticker ??= createTicker(_onTick);
+    _wake();
     _startDiagnosticsPolling();
     _creating = false;
   }
@@ -268,6 +301,11 @@ class _MapLibreBasemapState extends State<MapLibreBasemap>
         // stamp, no estimate.
         final rendered = _renderer.render(cropCamera(camera, visibleRect));
         final shown = _renderer.lastRenderedCamera;
+
+        // A camera jump cleared the renderer's idle latch; make sure the
+        // ticker runs to carry the aftermath (tile loads, fades). A
+        // same-camera rebuild leaves a parked ticker parked.
+        if (!_renderer.canSleep) _wake();
 
         // On success the texture needs only to be moved onto [visibleRect]
         // (identity when the viewport is unpinned). On failure the residual

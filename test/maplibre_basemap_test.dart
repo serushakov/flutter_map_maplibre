@@ -384,4 +384,97 @@ void main() {
     );
     expect(renderer.styleUrl, 'https://example.com/dark.json');
   });
+
+  testWidgets('ticker parks when the renderer reports canSleep', (
+    tester,
+  ) async {
+    await pumpMap(tester);
+    await tester.pump();
+    expect(renderer.tickCalls, greaterThan(0));
+
+    renderer.canSleepValue = true;
+    await tester.pump(); // the tick that observes canSleep and parks
+    final ticksAtPark = renderer.tickCalls;
+    await tester.pump();
+    await tester.pump();
+    expect(renderer.tickCalls, ticksAtPark, reason: 'parked: no more ticks');
+  });
+
+  testWidgets('a camera move wakes the parked ticker', (tester) async {
+    await pumpMap(tester);
+    renderer.canSleepValue = true;
+    await tester.pump();
+    final ticksAtPark = renderer.tickCalls;
+    await tester.pump();
+    expect(renderer.tickCalls, ticksAtPark);
+
+    controller.move(const LatLng(59.45, 24.80), 13);
+    await tester.pump(); // build renders the jump → latch clears → wake
+    await tester.pump(); // the restarted ticker ticks
+    expect(renderer.tickCalls, greaterThan(ticksAtPark));
+  });
+
+  testWidgets('insurance pump wakes the parked ticker when work appears', (
+    tester,
+  ) async {
+    await pumpMap(tester);
+    renderer.canSleepValue = true;
+    await tester.pump();
+    final ticksAtPark = renderer.tickCalls;
+
+    // Parked: the 5s pump polls and finds nothing; still parked.
+    await tester.pump(const Duration(seconds: 5));
+    expect(renderer.pumpWorkCalls, 1);
+    expect(renderer.tickCalls, ticksAtPark);
+
+    // Work appears (a tile expired, say): the pump wakes the ticker.
+    renderer.pumpWorkResult = true;
+    await tester.pump(const Duration(seconds: 5));
+    expect(renderer.pumpWorkCalls, 2);
+    await tester.pump();
+    expect(renderer.tickCalls, greaterThan(ticksAtPark));
+  });
+
+  testWidgets('a style change wakes the parked ticker', (tester) async {
+    await pumpMap(tester);
+    renderer.canSleepValue = true;
+    await tester.pump();
+    final ticksAtPark = renderer.tickCalls;
+    await tester.pump();
+    expect(renderer.tickCalls, ticksAtPark);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: FlutterMap(
+          mapController: controller,
+          options: const MapOptions(
+            initialCenter: LatLng(59.437, 24.7536),
+            initialZoom: 13,
+          ),
+          children: [
+            MapLibreBasemap(
+              styleUrl: 'https://example.com/dark.json',
+              rendererFactory: () => renderer,
+            ),
+          ],
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(renderer.tickCalls, greaterThan(ticksAtPark));
+  });
+
+  testWidgets('diagnostics carry tickerActive and parks', (tester) async {
+    Map<String, Object?>? latest;
+    await pumpMap(tester, onDiagnostics: (d) => latest = d);
+    await tester.pump(const Duration(seconds: 1));
+    expect(latest!['tickerActive'], isTrue);
+    expect(latest!['parks'], 0);
+
+    renderer.canSleepValue = true;
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 1));
+    expect(latest!['tickerActive'], isFalse);
+    expect(latest!['parks'], 1);
+  });
 }
