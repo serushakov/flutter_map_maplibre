@@ -114,6 +114,9 @@ class _MapLibreBasemapState extends State<MapLibreBasemap>
 
   @override
   void dispose() {
+    debugPrint(
+      'MLNDISPOSE state=${identityHashCode(this)} textureId=$_textureId',
+    );
     _ticker?.dispose();
     _diagnosticsTimer?.cancel();
     _renderer.dispose();
@@ -138,7 +141,22 @@ class _MapLibreBasemapState extends State<MapLibreBasemap>
 
   Future<void> _create(Size viewport, double devicePixelRatio) async {
     if (_creating) return;
+    // Defense against stale post-frame callbacks: every build during an
+    // in-flight create schedules another call, and under jank one can fire
+    // after the create lands. Recreating a live same-size session tears a
+    // working map down into seconds of blank style reload.
+    final existing = _viewportSize;
+    if (existing != null &&
+        (existing.width - viewport.width).abs() <= 1 &&
+        (existing.height - viewport.height).abs() <= 1) {
+      return;
+    }
     _creating = true;
+    debugPrint(
+      'MLNCREATE start state=${identityHashCode(this)} '
+      'viewport=${viewport.width.round()}x${viewport.height.round()} '
+      'had=$_textureId',
+    );
 
     // Resize path: the borrowed-texture session cannot be resized in place.
     if (_textureId != null) {
@@ -189,7 +207,9 @@ class _MapLibreBasemapState extends State<MapLibreBasemap>
     }
 
     debugPrint(
-      'MLNCREATE ok textureId=${result.textureId} viewport=$viewport '
+      'MLNCREATE ok state=${identityHashCode(this)} '
+      'textureId=${result.textureId} '
+      'viewport=${viewport.width.round()}x${viewport.height.round()} '
       'scale=$devicePixelRatio',
     );
     setState(() {

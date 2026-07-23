@@ -69,15 +69,20 @@ class _FakeRenderer implements BasemapRenderer {
   void dispose() => disposeCalls++;
 }
 
-/// The cold path still goes over the channel; mock it.
-void installChannelMock() {
+/// The cold path still goes over the channel; mock it. A [gate] future, when
+/// given, delays every createTextures response — the shape of the real
+/// method-channel round trip, during which more frames (and more post-frame
+/// _create callbacks) happen.
+void installChannelMock({Future<void>? gate}) {
+  var nextTextureId = 1;
   TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
       .setMockMethodCallHandler(MapLibreChannel.channel, (call) async {
         switch (call.method) {
           case 'createTextures':
+            if (gate != null) await gate;
             return <String, Object?>{
               'ok': true,
-              'textureId': 1,
+              'textureId': nextTextureId++,
               'backTexture': 0xDEAD,
               'diagnostics': <String, Object?>{},
             };
