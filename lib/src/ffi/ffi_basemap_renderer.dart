@@ -57,6 +57,7 @@ class FfiBasemapRenderer implements BasemapRenderer {
   bool _updateAvailable = false;
   bool _needsRepaint = false;
   bool _renderedSinceLastTick = false;
+  bool _idleSinceLastJump = false;
 
   final _diagnostics = <String, Object?>{};
   int _frameCount = 0;
@@ -78,6 +79,22 @@ class FfiBasemapRenderer implements BasemapRenderer {
 
   @override
   MapCamera? get lastRenderedCamera => _lastRenderedCamera;
+
+  @override
+  bool get canSleep =>
+      isReady &&
+      decideSleep(
+        idleSinceLastJump: _idleSinceLastJump,
+        updateAvailable: _updateAvailable,
+        needsRepaint: _needsRepaint,
+      );
+
+  @override
+  bool pumpWork() {
+    if (!isReady) return false;
+    _pumpEvents();
+    return _updateAvailable || _needsRepaint;
+  }
 
   @override
   bool create({
@@ -165,6 +182,12 @@ class FfiBasemapRenderer implements BasemapRenderer {
     // era's sameCamera guard.
     if (_sameCamera(_lastRenderedCamera, camera)) return true;
 
+    // Drain stale events BEFORE the jump: a MAP_IDLE emitted for the old
+    // camera must not survive past it, or the sleep gate would read "idle"
+    // while the new camera's tiles are still loading and park with work in
+    // flight.
+    _pumpEvents();
+
     _camera.ref = _b.mln_camera_options_default();
     _camera.ref.fields =
         _cameraOptionCenter | _cameraOptionZoom | _cameraOptionBearing;
@@ -175,8 +198,8 @@ class FfiBasemapRenderer implements BasemapRenderer {
     _b.mln_map_jump_to(_map, _camera);
     _b.mln_map_request_repaint(_map);
     _jumpedCamera = camera;
+    _idleSinceLastJump = false;
 
-    _pumpEvents();
     final clock = Stopwatch()..start();
     if (!_renderAndPresent()) return false;
     final ms = clock.elapsedMicroseconds / 1000.0;
@@ -283,6 +306,7 @@ class FfiBasemapRenderer implements BasemapRenderer {
           _updateAvailable = true;
         case _eventMapIdle:
           _idleEvents++;
+          _idleSinceLastJump = true;
         case _eventFrameFinished:
           if (_event.ref.payload != nullptr &&
               _event.ref.payload_size >=
@@ -309,6 +333,7 @@ class FfiBasemapRenderer implements BasemapRenderer {
     );
     calloc.free(native);
     _b.mln_map_request_repaint(_map);
+    _idleSinceLastJump = false;
   }
 
   static double _round2(double v) => (v * 100).roundToDouble() / 100;
@@ -366,5 +391,6 @@ class FfiBasemapRenderer implements BasemapRenderer {
     _outSession = nullptr;
     _lastRenderedCamera = null;
     _jumpedCamera = null;
+    _idleSinceLastJump = false;
   }
 }

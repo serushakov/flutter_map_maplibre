@@ -17,12 +17,25 @@ class _FakeRenderer implements BasemapRenderer {
   int? createdHeight;
   MapCamera? _last;
   String? styleUrl;
+  bool canSleepValue = false;
+  bool pumpWorkResult = false;
+  int pumpWorkCalls = 0;
 
   @override
   bool get isReady => true;
 
   @override
   MapCamera? get lastRenderedCamera => _last;
+
+  @override
+  bool get canSleep => canSleepValue;
+
+  @override
+  bool pumpWork() {
+    pumpWorkCalls++;
+    if (pumpWorkResult) canSleepValue = false; // work found → no longer idle
+    return pumpWorkResult;
+  }
 
   @override
   bool create({
@@ -43,6 +56,11 @@ class _FakeRenderer implements BasemapRenderer {
   @override
   bool render(MapCamera camera) {
     renderCalls++;
+    final jumped =
+        _last == null ||
+        _last!.center != camera.center ||
+        _last!.zoom != camera.zoom;
+    if (jumped) canSleepValue = false;
     if (!renderResult) return false;
     _last = camera;
     return true;
@@ -57,7 +75,10 @@ class _FakeRenderer implements BasemapRenderer {
   }
 
   @override
-  void setStyle(String styleUrl) => this.styleUrl = styleUrl;
+  void setStyle(String styleUrl) {
+    this.styleUrl = styleUrl;
+    canSleepValue = false;
+  }
 
   @override
   Map<String, Object?> diagnostics() => <String, Object?>{

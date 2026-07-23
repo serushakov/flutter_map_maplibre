@@ -45,4 +45,49 @@ void main() {
       TickDecision.render,
     );
   });
+
+  test('sleep: idle since the last jump with clear flags may park', () {
+    expect(
+      decideSleep(
+        idleSinceLastJump: true,
+        updateAvailable: false,
+        needsRepaint: false,
+      ),
+      isTrue,
+    );
+  });
+
+  test('sleep: clear flags alone are not enough — tiles for a new camera '
+      'can be loading with no repaint requested', () {
+    expect(
+      decideSleep(
+        idleSinceLastJump: false,
+        updateAvailable: false,
+        needsRepaint: false,
+      ),
+      isFalse,
+    );
+  });
+
+  test('sleep: a pending update vetoes the park even after idle', () {
+    expect(
+      decideSleep(
+        idleSinceLastJump: true,
+        updateAvailable: true,
+        needsRepaint: false,
+      ),
+      isFalse,
+    );
+  });
+
+  test('sleep: a repaint request vetoes the park even after idle', () {
+    expect(
+      decideSleep(
+        idleSinceLastJump: true,
+        updateAvailable: false,
+        needsRepaint: true,
+      ),
+      isFalse,
+    );
+  });
 }
