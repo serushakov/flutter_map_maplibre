@@ -4,6 +4,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_map/flutter_map.dart';
 
 import 'camera_conventions.dart';
+import 'ffi/ffi_probe.dart';
 import 'maplibre_channel.dart';
 import 'residual_transform.dart';
 
@@ -132,6 +133,10 @@ class _MapLibreBasemapState extends State<MapLibreBasemap> {
   Future<void> _create(Size viewport, double devicePixelRatio) async {
     if (_creating) return;
     _creating = true;
+
+    // Temporary (removed with the widget rewrite): FFI symbol probe, read
+    // from the device log as MLNFFI.
+    debugPrint('MLNFFI probe: ${probeMaplibreFfi()}');
 
     // Render a margin around the viewport so a zoom-out (which shrinks the
     // frame) has material to pull in from the edges instead of blank space.
