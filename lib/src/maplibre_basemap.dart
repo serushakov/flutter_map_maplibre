@@ -8,6 +8,7 @@ import 'basemap_renderer.dart';
 import 'ffi/ffi_basemap_renderer.dart';
 import 'maplibre_channel.dart';
 import 'residual_transform.dart';
+import 'viewport_crop.dart';
 
 /// A natively-rendered MapLibre vector basemap, for use as a `flutter_map`
 /// layer in place of `TileLayer`.
@@ -31,6 +32,8 @@ import 'residual_transform.dart';
 /// no estimation, no stamping. The residual transform survives only as the
 /// failure fallback, correcting against the renderer's ground-truth
 /// [BasemapRenderer.lastRenderedCamera].
+/// When the hosting layout is deliberately larger than what is visible, see
+/// [fixedViewport].
 class MapLibreBasemap extends StatefulWidget {
   const MapLibreBasemap({
     super.key,
@@ -38,6 +41,8 @@ class MapLibreBasemap extends StatefulWidget {
     this.onDiagnostics,
     this.applyResidualTransform = true,
     this.overRenderFactor = 1.0,
+    this.fixedViewport,
+    this.viewportAlignment = Alignment.bottomCenter,
     this.rendererFactory,
   }) : assert(overRenderFactor >= 1.0);
 
@@ -59,6 +64,19 @@ class MapLibreBasemap extends StatefulWidget {
   /// path, so 1.0 (exact viewport) is the expected value; the margin only
   /// papers over failure frames.
   final double overRenderFactor;
+
+  /// When set, the texture viewport is pinned to this size and layout size
+  /// changes never recreate the session. Use when the layer's widget is
+  /// deliberately laid out larger than what is visible (Vedu lays the map
+  /// out taller than the screen to push the camera center above the bottom
+  /// sheet): pass the truly visible size and the offscreen remainder is
+  /// never rendered. Null means the layout size is the viewport, recreating
+  /// on any layout change.
+  final Size? fixedViewport;
+
+  /// Where the fixed viewport sits inside the (possibly larger) layer.
+  /// Ignored when [fixedViewport] is null.
+  final Alignment viewportAlignment;
 
   /// Test seam: build the renderer. Defaults to the FFI implementation.
   final BasemapRenderer Function()? rendererFactory;
@@ -181,20 +199,22 @@ class _MapLibreBasemapState extends State<MapLibreBasemap>
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        final size = constraints.biggest;
+        final layoutSize = constraints.biggest;
         final devicePixelRatio = MediaQuery.devicePixelRatioOf(context);
 
-        // Sizes churn every frame while a bottom sheet drags, hence the
-        // tolerance. Compared against the unenlarged viewport.
+        // The viewport the session must match: pinned when [fixedViewport]
+        // is set, the layout size otherwise. Layout sizes churn every frame
+        // while a bottom sheet drags, hence the tolerance.
+        final viewport = widget.fixedViewport ?? layoutSize;
         final current = _viewportSize;
         final needsCreate =
             current == null ||
-            (current.width - size.width).abs() > 1 ||
-            (current.height - size.height).abs() > 1;
+            (current.width - viewport.width).abs() > 1 ||
+            (current.height - viewport.height).abs() > 1;
 
-        if (needsCreate && size.isFinite && !size.isEmpty) {
+        if (needsCreate && viewport.isFinite && !viewport.isEmpty) {
           WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (mounted) _create(size, devicePixelRatio);
+            if (mounted) _create(viewport, devicePixelRatio);
           });
         }
 
@@ -205,22 +225,38 @@ class _MapLibreBasemapState extends State<MapLibreBasemap>
           return const SizedBox.shrink();
         }
 
+        // The part of the layer the texture covers: the whole layer when the
+        // viewport is unpinned, the aligned sub-rect when it is pinned — the
+        // rest of the layer is clipped offscreen by construction and never
+        // rendered.
+        final visibleRect = widget.viewportAlignment.inscribe(
+          viewport,
+          Offset.zero & layoutSize,
+        );
+
         // The same-frame render: by the time this build returns, the front
-        // buffer shows [camera] (on success). No stamp, no estimate.
-        final rendered = _renderer.render(camera);
+        // buffer shows [visibleRect]'s view of [camera] (on success). No
+        // stamp, no estimate.
+        final rendered = _renderer.render(cropCamera(camera, visibleRect));
         final shown = _renderer.lastRenderedCamera;
 
-        // First frame before any successful render: draw uncorrected rather
-        // than hide the map (a hidden map is indistinguishable from a broken
-        // renderer).
+        // On success the texture needs only to be moved onto [visibleRect]
+        // (identity when the viewport is unpinned). On failure the residual
+        // places the stale cropped frame in the full layer's frame — the
+        // formula already accounts for the size mismatch, no extra
+        // translate. First frame before any successful render: draw
+        // unplaced rather than hide the map (a hidden map is
+        // indistinguishable from a broken renderer).
+        final placed = Matrix4.identity()
+          ..translateByDouble(visibleRect.left, visibleRect.top, 0, 1);
         final transform = (rendered || shown == null)
-            ? Matrix4.identity()
+            ? placed
             : widget.applyResidualTransform
             ? residualTransform(
                 rendered: shown.withNonRotatedSize(renderSize),
                 current: camera,
               )
-            : Matrix4.identity();
+            : placed;
 
         return Transform(
           transform: transform,

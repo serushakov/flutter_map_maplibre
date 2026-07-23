@@ -12,6 +12,9 @@ class _FakeRenderer implements BasemapRenderer {
   int renderCalls = 0;
   int tickCalls = 0;
   int disposeCalls = 0;
+  int createCalls = 0;
+  int? createdWidth;
+  int? createdHeight;
   MapCamera? _last;
   String? styleUrl;
 
@@ -30,6 +33,9 @@ class _FakeRenderer implements BasemapRenderer {
     required double scale,
     required String styleUrl,
   }) {
+    createCalls++;
+    createdWidth = width;
+    createdHeight = height;
     this.styleUrl = styleUrl;
     return true;
   }
@@ -134,6 +140,126 @@ void main() {
     );
     return transform.transform;
   }
+
+  /// Fixed-viewport harness: the map widget in a parent-controlled box, the
+  /// shape of Vedu's sheet center-offset layout (layer taller than screen).
+  Future<void> pumpSizedMap(
+    WidgetTester tester, {
+    required double height,
+    Size? fixedViewport,
+  }) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Align(
+          alignment: Alignment.topLeft,
+          child: SizedBox(
+            width: 400,
+            height: height,
+            child: FlutterMap(
+              mapController: controller,
+              options: const MapOptions(
+                initialCenter: LatLng(59.437, 24.7536),
+                initialZoom: 13,
+              ),
+              children: [
+                MapLibreBasemap(
+                  styleUrl: 'https://example.com/style.json',
+                  fixedViewport: fixedViewport,
+                  rendererFactory: () => renderer,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+  }
+
+  testWidgets('fixedViewport: layout resize never recreates the session', (
+    tester,
+  ) async {
+    controller = MapController();
+    await pumpSizedMap(
+      tester,
+      height: 800,
+      fixedViewport: const Size(400, 600),
+    );
+    expect(renderer.createCalls, 1);
+    expect(renderer.createdWidth, 400);
+    expect(renderer.createdHeight, 600);
+
+    // The sheet-drag scenario: the layer grows, the session must not.
+    await pumpSizedMap(
+      tester,
+      height: 900,
+      fixedViewport: const Size(400, 600),
+    );
+    expect(renderer.createCalls, 1);
+    expect(renderer.disposeCalls, 0);
+  });
+
+  testWidgets('fixedViewport: renders the cropped camera on the visible rect', (
+    tester,
+  ) async {
+    controller = MapController();
+    await pumpSizedMap(
+      tester,
+      height: 800,
+      fixedViewport: const Size(400, 600),
+    );
+
+    final shown = renderer.lastRenderedCamera!;
+    expect(shown.nonRotatedSize, const Size(400, 600));
+    // Bottom-aligned: the visible strip's center sits below the layer
+    // center, so the cropped camera looks further south.
+    expect(shown.center.latitude, lessThan(controller.camera.center.latitude));
+    expect(
+      shown.center.longitude,
+      closeTo(controller.camera.center.longitude, 1e-9),
+    );
+
+    // Success-path transform is the pure translation onto the visible rect
+    // (bottomCenter of a 400x800 layer with a 400x600 viewport → dy 200).
+    var translation = basemapTransform(tester).getTranslation();
+    expect(translation.x, closeTo(0, 1e-6));
+    expect(translation.y, closeTo(200, 1e-6));
+
+    await pumpSizedMap(
+      tester,
+      height: 900,
+      fixedViewport: const Size(400, 600),
+    );
+    translation = basemapTransform(tester).getTranslation();
+    expect(translation.y, closeTo(300, 1e-6));
+  });
+
+  testWidgets('changing fixedViewport recreates the session', (tester) async {
+    controller = MapController();
+    await pumpSizedMap(
+      tester,
+      height: 800,
+      fixedViewport: const Size(400, 600),
+    );
+    expect(renderer.createCalls, 1);
+    await pumpSizedMap(
+      tester,
+      height: 800,
+      fixedViewport: const Size(400, 500),
+    );
+    expect(renderer.createCalls, 2);
+  });
+
+  testWidgets('without fixedViewport a layout resize recreates', (
+    tester,
+  ) async {
+    controller = MapController();
+    await pumpSizedMap(tester, height: 800);
+    expect(renderer.createCalls, 1);
+    await pumpSizedMap(tester, height: 900);
+    expect(renderer.createCalls, 2);
+  });
 
   testWidgets('build renders the current camera and draws at identity', (
     tester,
