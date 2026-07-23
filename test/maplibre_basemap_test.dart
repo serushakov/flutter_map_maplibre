@@ -155,6 +155,12 @@ void main() {
     expect(isIdentity(basemapTransform(tester)), isFalse);
 
     harness.replyNext(rendered: false);
+    // Two pumps, mirroring the 'stamps' test: a buggy unconditional stamp
+    // would call setState from the reply's Future callback, and that
+    // rebuild lands one frame late relative to this pump. Without the
+    // second pump the assertion below would pass regardless of whether the
+    // implementation is honest about `rendered`.
+    await tester.pump();
     await tester.pump();
     expect(
       isIdentity(basemapTransform(tester)),
