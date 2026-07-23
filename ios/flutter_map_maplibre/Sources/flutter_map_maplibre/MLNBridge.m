@@ -20,7 +20,7 @@ static NSMutableDictionary<NSString *, id> *gLastFailure = nil;
   NSInteger _idleEvents;
   NSInteger _linkRenders;
   NSInteger _skippedTicks;
-  NSInteger _cameraRenders;
+  NSInteger _cameraRenders;  // renders driven by setCamera, vs the display link's _linkRenders
   BOOL _needsRepaint;
   int64_t _nativeFrames;
   int64_t _drawCalls;

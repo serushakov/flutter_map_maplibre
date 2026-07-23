@@ -50,8 +50,6 @@ class _ChannelHarness {
         .setMockMethodCallHandler(MapLibreChannel.channel, null);
   }
 
-  int get pendingReplies => _replies.where((c) => !c.isCompleted).length;
-
   void replyNext({required bool rendered}) {
     _replies.firstWhere((c) => !c.isCompleted).complete(<String, Object?>{
       'rendered': rendered,

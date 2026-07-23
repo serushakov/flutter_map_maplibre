@@ -90,7 +90,7 @@ class MapLibreChannel {
           'bearing': bearing,
         },
       );
-      return response?['rendered'] as bool? ?? false;
+      return response?['rendered'] == true;
     } on PlatformException {
       // A dropped camera push costs one stale frame, nothing more.
       return false;
