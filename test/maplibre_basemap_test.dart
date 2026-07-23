@@ -152,6 +152,10 @@ void main() {
       MaterialApp(
         home: OverflowBox(
           alignment: Alignment.topLeft,
+          // All four bounds explicit: unset mins inherit the incoming TIGHT
+          // 800x600 test-surface constraints and clamp the SizedBox back up.
+          minWidth: 0,
+          minHeight: 0,
           maxWidth: double.infinity,
           maxHeight: double.infinity,
           child: SizedBox(
