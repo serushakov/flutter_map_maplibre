@@ -87,6 +87,11 @@ class FfiBasemapRenderer implements BasemapRenderer {
         idleSinceLastJump: _idleSinceLastJump,
         updateAvailable: _updateAvailable,
         needsRepaint: _needsRepaint,
+        // Not identical means the last jump's render or present failed and
+        // never landed in _lastRenderedCamera: the screen still shows the
+        // old camera, so sleep stays vetoed until a later render publishes
+        // it (see decideSleep's doc).
+        unpublishedJump: !identical(_jumpedCamera, _lastRenderedCamera),
       );
 
   @override

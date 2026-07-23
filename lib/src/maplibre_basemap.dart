@@ -217,6 +217,11 @@ class _MapLibreBasemapState extends State<MapLibreBasemap>
       // On !mounted the native presenter was still created; without this it
       // sits orphaned at viewport-resolution GPU memory until the next create.
       _channel.disposeTextures();
+      // A previously-parked widget's insurance pump would otherwise run
+      // forever against a session that no longer exists; nothing else will
+      // restart the ticker on this dead path.
+      _insurancePump?.cancel();
+      _insurancePump = null;
       _creating = false;
       return;
     }
@@ -234,6 +239,10 @@ class _MapLibreBasemapState extends State<MapLibreBasemap>
       widget.onDiagnostics?.call(_renderer.diagnostics());
       // The renderer failed but the presenter exists — don't orphan it.
       _channel.disposeTextures();
+      // Same as above: don't leave the insurance pump running against a
+      // renderer create that failed.
+      _insurancePump?.cancel();
+      _insurancePump = null;
       _creating = false;
       return;
     }

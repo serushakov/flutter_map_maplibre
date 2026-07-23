@@ -30,11 +30,17 @@ TickDecision decideTick({
 /// camera jump: flags alone can look clear while tiles for a new camera are
 /// still loading (partial render with no repaint requested) — MAP_IDLE is
 /// the renderer's own "that frame was final" and only it opens the gate.
+/// [unpublishedJump] vetoes the park when the last camera jump's render or
+/// present failed: the screen still shows the old camera, so parking would
+/// freeze the fallback frame with no flag the insurance pump can see, and
+/// sleep stays vetoed until a successful render publishes it.
 bool decideSleep({
   required bool idleSinceLastJump,
   required bool updateAvailable,
   required bool needsRepaint,
-}) => idleSinceLastJump && !updateAvailable && !needsRepaint;
+  required bool unpublishedJump,
+}) =>
+    idleSinceLastJump && !updateAvailable && !needsRepaint && !unpublishedJump;
 
 /// The native renderer as the basemap widget sees it. One implementation
 /// talks FFI ([FfiBasemapRenderer]); tests inject a fake. The defining
@@ -72,7 +78,11 @@ abstract interface class BasemapRenderer {
 
   /// True when the map has reported MAP_IDLE since the last camera jump and
   /// no update or repaint is pending: the widget's ticker may stop. A camera
-  /// jump, [setStyle], or [pumpWork] finding work wakes it back up.
+  /// jump, [setStyle], or [pumpWork] finding work clears the latch so this
+  /// turns false again. Implementations must also return false when the
+  /// session is not ready. Stopping and restarting the ticker is the
+  /// widget's job — this getter only reports, it does not wake anything
+  /// itself.
   bool get canSleep;
 
   /// Insurance-pump hook: drains the runtime event queue WITHOUT rendering

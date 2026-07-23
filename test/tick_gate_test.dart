@@ -52,6 +52,7 @@ void main() {
         idleSinceLastJump: true,
         updateAvailable: false,
         needsRepaint: false,
+        unpublishedJump: false,
       ),
       isTrue,
     );
@@ -64,6 +65,7 @@ void main() {
         idleSinceLastJump: false,
         updateAvailable: false,
         needsRepaint: false,
+        unpublishedJump: false,
       ),
       isFalse,
     );
@@ -75,6 +77,7 @@ void main() {
         idleSinceLastJump: true,
         updateAvailable: true,
         needsRepaint: false,
+        unpublishedJump: false,
       ),
       isFalse,
     );
@@ -86,6 +89,20 @@ void main() {
         idleSinceLastJump: true,
         updateAvailable: false,
         needsRepaint: true,
+        unpublishedJump: false,
+      ),
+      isFalse,
+    );
+  });
+
+  test('sleep: an unpublished jump (render/present failed) vetoes the park '
+      'even after idle with clear flags', () {
+    expect(
+      decideSleep(
+        idleSinceLastJump: true,
+        updateAvailable: false,
+        needsRepaint: false,
+        unpublishedJump: true,
       ),
       isFalse,
     );
