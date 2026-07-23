@@ -7,6 +7,8 @@ public class FlutterMapMaplibrePlugin: NSObject, FlutterPlugin {
   // Held so the texture outlives the call; the example app keeps showing it.
   private var probe: MetalProbe?
   private var textureId: Int64?
+  private var presenter: TexturePresenter?
+  private var presenterTextureId: Int64?
 
   init(textures: FlutterTextureRegistry) {
     self.textures = textures
@@ -56,6 +58,39 @@ public class FlutterMapMaplibrePlugin: NSObject, FlutterPlugin {
           zoom: args["zoom"] as? Double ?? 13,
           bearing: args["bearing"] as? Double ?? 0) ?? false
       result(["rendered": rendered])
+      return
+    }
+    if call.method == "createTextures" {
+      let args = call.arguments as? [String: Any] ?? [:]
+      let width = args["width"] as? Int ?? 0
+      let height = args["height"] as? Int ?? 0
+      let scale = args["scale"] as? Double ?? 2.0
+      guard let presenter = TexturePresenter(width: width, height: height, scale: scale)
+      else {
+        result(["ok": false, "error": "TexturePresenter init failed"])
+        return
+      }
+      // One presenter per plugin instance; replacing tears the old one down.
+      disposePresenter()
+      self.presenter = presenter
+      let id = textures.register(presenter)
+      presenterTextureId = id
+      PresenterRegistry.lock.lock()
+      PresenterRegistry.entries[id] = (presenter, textures)
+      PresenterRegistry.lock.unlock()
+      let backAddress = Int64(
+        Int(bitPattern: Unmanaged.passUnretained(presenter.backTexture as AnyObject).toOpaque()))
+      result([
+        "ok": true,
+        "textureId": Int(id),
+        "backTexture": backAddress,
+        "diagnostics": presenter.diagnostics,
+      ])
+      return
+    }
+    if call.method == "disposeTextures" {
+      disposePresenter()
+      result(nil)
       return
     }
     guard call.method == "runProbe" else {
@@ -142,5 +177,16 @@ public class FlutterMapMaplibrePlugin: NSObject, FlutterPlugin {
   /// Spike: read back the probe's diagnostics after it has been running.
   public func currentMapDiagnostics() -> [String: Any] {
     mapProbe?.diagnostics ?? [:]
+  }
+
+  private func disposePresenter() {
+    if let id = presenterTextureId {
+      PresenterRegistry.lock.lock()
+      PresenterRegistry.entries.removeValue(forKey: id)
+      PresenterRegistry.lock.unlock()
+      textures.unregisterTexture(id)
+    }
+    presenter = nil
+    presenterTextureId = nil
   }
 }
