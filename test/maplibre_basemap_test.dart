@@ -150,8 +150,10 @@ void main() {
   }) async {
     await tester.pumpWidget(
       MaterialApp(
-        home: Align(
+        home: OverflowBox(
           alignment: Alignment.topLeft,
+          maxWidth: double.infinity,
+          maxHeight: double.infinity,
           child: SizedBox(
             width: 400,
             height: height,
