@@ -25,13 +25,14 @@ NS_ASSUME_NONNULL_BEGIN
 /// skips the render entirely. Returns YES if a frame was rendered.
 - (BOOL)renderTick;
 
-/// Moves the camera. Called from Dart as the flutter_map camera changes; the
-/// residual transform on the Flutter side covers the frames of lag between
-/// this landing and the next render.
-- (void)setCameraLatitude:(double)latitude
-                longitude:(double)longitude
-                     zoom:(double)zoom
-                  bearing:(double)bearing;
+/// Moves the camera and renders the frame for it before returning, so the
+/// caller's reply means "this camera is in the texture" — the property the
+/// Dart residual transform's bookkeeping relies on. Returns YES if the
+/// render succeeded (NO means the texture still shows the previous camera).
+- (BOOL)setCameraAndRenderLatitude:(double)latitude
+                         longitude:(double)longitude
+                              zoom:(double)zoom
+                           bearing:(double)bearing;
 
 /// Swaps the style without tearing down the map or the render session.
 - (void)setStyleURL:(NSString *)styleURL;

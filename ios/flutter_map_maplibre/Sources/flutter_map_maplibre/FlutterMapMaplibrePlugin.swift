@@ -49,12 +49,13 @@ public class FlutterMapMaplibrePlugin: NSObject, FlutterPlugin {
     }
     if call.method == "setCamera" {
       let args = call.arguments as? [String: Any] ?? [:]
-      mapProbe?.setCamera(
-        latitude: args["lat"] as? Double ?? 0,
-        longitude: args["lng"] as? Double ?? 0,
-        zoom: args["zoom"] as? Double ?? 13,
-        bearing: args["bearing"] as? Double ?? 0)
-      result(nil)
+      let rendered =
+        mapProbe?.setCamera(
+          latitude: args["lat"] as? Double ?? 0,
+          longitude: args["lng"] as? Double ?? 0,
+          zoom: args["zoom"] as? Double ?? 13,
+          bearing: args["bearing"] as? Double ?? 0) ?? false
+      result(["rendered": rendered])
       return
     }
     guard call.method == "runProbe" else {

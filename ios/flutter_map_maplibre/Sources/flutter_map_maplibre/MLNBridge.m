@@ -91,11 +91,11 @@ static NSMutableDictionary<NSString *, id> *gLastFailure = nil;
   return nil;
 }
 
-- (void)setCameraLatitude:(double)latitude
-                longitude:(double)longitude
-                     zoom:(double)zoom
-                  bearing:(double)bearing {
-  if (!_map) return;
+- (BOOL)setCameraAndRenderLatitude:(double)latitude
+                         longitude:(double)longitude
+                              zoom:(double)zoom
+                           bearing:(double)bearing {
+  if (!_map || !_session) return NO;
   mln_camera_options camera = mln_camera_options_default();
   camera.fields = MLN_CAMERA_OPTION_CENTER | MLN_CAMERA_OPTION_ZOOM |
                   MLN_CAMERA_OPTION_BEARING;
@@ -105,6 +105,14 @@ static NSMutableDictionary<NSString *, id> *gLastFailure = nil;
   camera.bearing = bearing;
   mln_map_jump_to(_map, &camera);
   mln_map_request_repaint(_map);
+
+  [self pumpEvents];
+  BOOL rendered = [self renderNow];
+  if (rendered) {
+    _cameraRenders++;
+    _diagnostics[@"cameraRenders"] = @(_cameraRenders);
+  }
+  return rendered;
 }
 
 - (void)setStyleURL:(NSString *)styleURL {

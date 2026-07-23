@@ -146,11 +146,24 @@ final class MapLibreProbe: NSObject, FlutterTexture {
     }
   }
 
+  /// Pushes the camera and renders its frame before returning — the caller's
+  /// method-channel reply is the "frame landed" signal for the Dart side.
+  /// Fires `onFrame` so Flutter re-samples the texture; without it the render
+  /// is invisible.
   func setCamera(
     latitude: Double, longitude: Double, zoom: Double, bearing: Double
-  ) {
-    bridge?.setCameraLatitude(
+  ) -> Bool {
+    guard let bridge else { return false }
+    let rendered = bridge.setCameraAndRenderLatitude(
       latitude, longitude: longitude, zoom: zoom, bearing: bearing)
+    if rendered {
+      frameCount += 1
+      onFrame?()
+    }
+    for (key, value) in bridge.diagnostics {
+      diagnostics[key as String] = value
+    }
+    return rendered
   }
 
   func setStyle(_ url: String) {
