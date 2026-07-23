@@ -159,6 +159,10 @@ class _MapLibreBasemapState extends State<MapLibreBasemap>
         !result.ok ||
         result.textureId == null ||
         result.backTextureAddress == null) {
+      debugPrint(
+        'MLNCREATE textures failed mounted=$mounted ok=${result.ok} '
+        'diag=${result.diagnostics}',
+      );
       widget.onDiagnostics?.call(result.diagnostics);
       // On !mounted the native presenter was still created; without this it
       // sits orphaned at viewport-resolution GPU memory until the next create.
@@ -176,6 +180,7 @@ class _MapLibreBasemapState extends State<MapLibreBasemap>
       styleUrl: widget.styleUrl,
     );
     if (!created) {
+      debugPrint('MLNCREATE renderer failed diag=${_renderer.diagnostics()}');
       widget.onDiagnostics?.call(_renderer.diagnostics());
       // The renderer failed but the presenter exists — don't orphan it.
       _channel.disposeTextures();
@@ -183,6 +188,10 @@ class _MapLibreBasemapState extends State<MapLibreBasemap>
       return;
     }
 
+    debugPrint(
+      'MLNCREATE ok textureId=${result.textureId} viewport=$viewport '
+      'scale=$devicePixelRatio',
+    );
     setState(() {
       _textureId = result.textureId;
       _viewportSize = viewport;

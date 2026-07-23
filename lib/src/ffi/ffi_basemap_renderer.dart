@@ -1,6 +1,7 @@
 import 'dart:ffi';
 
 import 'package:ffi/ffi.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_map/flutter_map.dart';
 
 import '../basemap_renderer.dart';
@@ -70,6 +71,7 @@ class FfiBasemapRenderer implements BasemapRenderer {
   double? _renderMsInline;
   double? _blitMs;
   int _drawCalls = 0;
+  int _failStreak = 0;
 
   @override
   bool get isReady => _session != nullptr;
@@ -221,15 +223,24 @@ class FfiBasemapRenderer implements BasemapRenderer {
     final status = _b.mln_render_session_render_update(_session);
     final elapsedMs = clock.elapsedMicroseconds / 1000.0;
     _diagnostics['lastRenderStatus'] = status;
-    if (status != _statusOk) return false;
+    if (status != _statusOk) {
+      _noteFailure('render_update status=$status');
+      return false;
+    }
 
     final blit = _present(_presenterId);
     if (blit < 0) {
       _diagnostics['presentError'] = blit;
+      _noteFailure('present rc=$blit');
       return false;
     }
     // A recovered pipeline must not keep reporting the old failure.
     _diagnostics.remove('presentError');
+    if (_failStreak > 0) {
+      debugPrint('MLNERR recovered after streak=$_failStreak');
+      _failStreak = 0;
+      _diagnostics.remove('failStreak');
+    }
     _blitMs = _blitMs == null ? blit : _blitMs! * 0.8 + blit * 0.2;
 
     _updateAvailable = false;
@@ -243,6 +254,18 @@ class FfiBasemapRenderer implements BasemapRenderer {
     }
     _diagnostics['renderMsLast'] = _round2(elapsedMs);
     return true;
+  }
+
+  /// Render failures are otherwise invisible on device — the widget silently
+  /// falls back to the residual transform, and a sustained failure looks like
+  /// the map vanishing. Surface the first failure of a streak, then every
+  /// ~2s of a sustained one, with the failing call and its code.
+  void _noteFailure(String what) {
+    _failStreak++;
+    _diagnostics['failStreak'] = _failStreak;
+    if (_failStreak == 1 || _failStreak % 240 == 0) {
+      debugPrint('MLNERR $what streak=$_failStreak');
+    }
   }
 
   /// Drains the runtime event queue into flags. `_updateAvailable` is sticky:
