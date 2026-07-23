@@ -65,26 +65,35 @@ class MapLibreChannel {
     }
   }
 
-  /// Pushes the camera to the native renderer. The renderer is always a frame
-  /// or two behind; the residual transform closes that gap on the Flutter side.
+  /// Pushes the camera to the native renderer, which renders the frame for it
+  /// *before* replying — a `true` result means the texture now shows exactly
+  /// this camera. That property is what keeps the residual transform honest.
+  ///
+  /// `false` means the texture is unchanged (failed render, platform error,
+  /// or older native code); callers must not treat the camera as rendered.
   ///
   /// [zoom] and [bearing] are in *MapLibre's* units, not `flutter_map`'s — see
   /// `camera_conventions.dart`. They go straight to `mln_map_jump_to`.
-  Future<void> setCamera({
+  Future<bool> setCamera({
     required double lat,
     required double lng,
     required double zoom,
     required double bearing,
   }) async {
     try {
-      await channel.invokeMethod<void>('setCamera', <String, Object?>{
-        'lat': lat,
-        'lng': lng,
-        'zoom': zoom,
-        'bearing': bearing,
-      });
+      final response = await channel.invokeMapMethod<String, Object?>(
+        'setCamera',
+        <String, Object?>{
+          'lat': lat,
+          'lng': lng,
+          'zoom': zoom,
+          'bearing': bearing,
+        },
+      );
+      return response?['rendered'] as bool? ?? false;
     } on PlatformException {
       // A dropped camera push costs one stale frame, nothing more.
+      return false;
     }
   }
 
