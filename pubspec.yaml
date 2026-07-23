@@ -11,7 +11,9 @@ dependencies:
   flutter:
     sdk: flutter
   flutter_map: ^8.3.1
-  latlong2: ^0.10.1
+  # Match flutter_map's own range rather than pinning, so this package adopts
+  # whatever latlong2 the host app already resolved (Vedu is on 0.9.x).
+  latlong2: '>=0.9.1 <0.11.0'
   vector_math: ^2.2.0
 
 dev_dependencies:

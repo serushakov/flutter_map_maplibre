@@ -57,8 +57,13 @@ with the camera owned by Dart.
     'LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*]' => mln_sim,
   }
   # The app target links the archive too, and PODS_TARGET_SRCROOT is not
-  # defined there — hence the PODS_ROOT-relative path.
-  mln_user_root = '$(PODS_ROOT)/../../../ios/MaplibreNativeC.xcframework'
+  # defined there. Reach the xcframework through Flutter's plugin symlink,
+  # which every host app has at <host>/ios/.symlinks/plugins/<name>/ —
+  # independent of where the host app sits relative to this package. (A path
+  # like $(PODS_ROOT)/../../../ios only happens to resolve for the bundled
+  # example, which sits exactly one level below the package.)
+  mln_user_root =
+    '$(PODS_ROOT)/../.symlinks/plugins/flutter_map_maplibre/ios/MaplibreNativeC.xcframework'
   s.user_target_xcconfig = {
     # maplibre-native-ffi has no x86_64 simulator preset, so a universal
     # simulator build has nothing to link for that slice.
