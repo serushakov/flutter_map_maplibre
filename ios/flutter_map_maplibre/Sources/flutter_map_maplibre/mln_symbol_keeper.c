@@ -6,7 +6,7 @@
 // null. This table references every symbol the Dart bindings call, keeping
 // them alive through the app link. Update it whenever ffigen.yaml's function
 // list changes.
-__attribute__((used)) static void* const mln_ffi_symbol_keeper[] = {
+__attribute__((used)) void* const mln_ffi_symbol_keeper[] = {
   (void*)mln_c_version,
   (void*)mln_supported_render_backend_mask,
   (void*)mln_runtime_options_default,

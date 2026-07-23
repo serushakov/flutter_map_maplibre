@@ -65,6 +65,13 @@ with the camera owned by Dart.
   mln_user_root =
     '$(PODS_ROOT)/../.symlinks/plugins/flutter_map_maplibre/ios/MaplibreNativeC.xcframework'
   s.user_target_xcconfig = {
+    # dart:ffi resolves mln_* via dlsym on the app image; the default app
+    # strip style (all symbols) demotes statically linked globals and breaks
+    # the lookup. non-global keeps them in the symbol table.
+    'STRIP_STYLE' => 'non-global',
+    # The keeper object defines no symbol anyone references, so the linker
+    # would skip that archive member entirely; -u forces it in.
+    'OTHER_LDFLAGS' => '$(inherited) -Wl,-u,_mln_ffi_symbol_keeper',
     # maplibre-native-ffi has no x86_64 simulator preset, so a universal
     # simulator build has nothing to link for that slice.
     'EXCLUDED_ARCHS[sdk=iphonesimulator*]' => 'i386 x86_64',
