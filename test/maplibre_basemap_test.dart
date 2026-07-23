@@ -112,58 +112,77 @@ void main() {
 
   bool isIdentity(Matrix4 m) => m.isIdentity();
 
-  testWidgets('stamps _rendered only when the reply arrives', (tester) async {
+  testWidgets('stamps _rendered when the push is sent', (tester) async {
     await pumpMap(tester);
 
-    // Initial push in flight; before any reply the widget treats the texture
-    // as showing the current camera (renderedOrCurrent fallback) — identity.
+    // Initial push in flight; the send-time stamp means the frame that sent
+    // the push already treats the texture as showing its camera — identity.
     expect(isIdentity(basemapTransform(tester)), isTrue);
 
     harness.replyNext(rendered: true);
     await tester.pump();
     expect(isIdentity(basemapTransform(tester)), isTrue);
 
-    // Move: current camera leaves the rendered camera behind. The transform
-    // must become non-identity (residual correction) until the reply lands.
+    // Move: the same build both sends the push and stamps its camera, so the
+    // transform stays identity in that very frame — no reply needed. (The
+    // native handler renders before replying, so by composite time the
+    // texture matches; stamping on reply instead makes the transform assume
+    // a one-frame-older camera and oscillate, which showed up on device as
+    // stutter.)
     controller.move(const LatLng(59.45, 24.80), 13);
-    await tester.pump();
-    expect(isIdentity(basemapTransform(tester)), isFalse);
-
-    harness.replyNext(rendered: true);
-    // Two pumps: the first lets the reply's Future callback run and call
-    // setState; markNeedsBuild from a callback that resolves mid-pump lands
-    // one frame late, so the rebuild that actually shows the new transform
-    // needs a second pump.
-    await tester.pump();
     await tester.pump();
     expect(
       isIdentity(basemapTransform(tester)),
       isTrue,
-      reason: 'reply == frame landed, so the transform settles',
+      reason: 'send-time stamp: the pushing frame already trusts the texture',
     );
   });
 
-  testWidgets('a failed render does not advance _rendered', (tester) async {
+  testWidgets('a queued (unsent) camera is not stamped', (tester) async {
+    await pumpMap(tester);
+    // Initial push still in flight — the next move cannot send, only queue.
+    controller.move(const LatLng(59.45, 24.80), 13);
+    await tester.pump();
+    expect(
+      isIdentity(basemapTransform(tester)),
+      isFalse,
+      reason:
+          'the moved camera was queued, not sent, so the transform must '
+          'correct against the initial camera still in the texture',
+    );
+  });
+
+  testWidgets('a failed render rolls back and retries the push', (
+    tester,
+  ) async {
     await pumpMap(tester);
     harness.replyNext(rendered: true);
     await tester.pump();
 
     controller.move(const LatLng(59.45, 24.80), 13);
     await tester.pump();
-    expect(isIdentity(basemapTransform(tester)), isFalse);
+    expect(isIdentity(basemapTransform(tester)), isTrue);
+    final callsBefore = harness.setCameraCalls.length;
 
     harness.replyNext(rendered: false);
-    // Two pumps, mirroring the 'stamps' test: a buggy unconditional stamp
-    // would call setState from the reply's Future callback, and that
-    // rebuild lands one frame late relative to this pump. Without the
-    // second pump the assertion below would pass regardless of whether the
-    // implementation is honest about `rendered`.
+    // The rollback setState fires from the reply's Future callback; its
+    // rebuild lands on the next pump, and that rebuild re-pushes the current
+    // camera (the sameCamera guard now fails against the rolled-back stamp).
+    // Without the rollback there is no setState, no rebuild, and no retry —
+    // this is what discriminates honest failure handling from
+    // optimism-forever.
     await tester.pump();
     await tester.pump();
     expect(
+      harness.setCameraCalls.length,
+      callsBefore + 1,
+      reason: 'a failed render must retry the camera on the next rebuild',
+    );
+    expect(harness.setCameraCalls.last['lat'], closeTo(59.45, 1e-9));
+    expect(
       isIdentity(basemapTransform(tester)),
-      isFalse,
-      reason: 'texture unchanged, so the correction must persist',
+      isTrue,
+      reason: 'the retry re-stamps optimistically',
     );
   });
 

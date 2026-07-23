@@ -21,6 +21,7 @@ static NSMutableDictionary<NSString *, id> *gLastFailure = nil;
   NSInteger _linkRenders;
   NSInteger _skippedTicks;
   NSInteger _cameraRenders;  // renders driven by setCamera, vs the display link's _linkRenders
+  CFAbsoluteTime _lastCameraRender;
   BOOL _needsRepaint;
   int64_t _nativeFrames;
   int64_t _drawCalls;
@@ -111,6 +112,7 @@ static NSMutableDictionary<NSString *, id> *gLastFailure = nil;
   if (rendered) {
     _cameraRenders++;
     _diagnostics[@"cameraRenders"] = @(_cameraRenders);
+    _lastCameraRender = CFAbsoluteTimeGetCurrent();
   }
   return rendered;
 }
@@ -225,6 +227,18 @@ static NSMutableDictionary<NSString *, id> *gLastFailure = nil;
   // the events prove dishonest on device (spec §2): drop `_updateAvailable`
   // from the condition and gate on `_needsRepaint` alone.
   if (!_updateAvailable && !_needsRepaint) {
+    _skippedTicks++;
+    _diagnostics[@"skippedTicks"] = @(_skippedTicks);
+    return NO;
+  }
+
+  // A camera push already rendered a fresh frame within this display
+  // interval; rendering again would be the same content at ~2ms a pop. On
+  // device this double-render ran constantly during gestures (~220
+  // renders/sec: every pan keeps needs_repaint true while tiles load).
+  // 7ms sits under the 120Hz interval, so the suppression never spans a
+  // whole interval and animations resume on the next tick once pushes stop.
+  if (CFAbsoluteTimeGetCurrent() - _lastCameraRender < 0.007) {
     _skippedTicks++;
     _diagnostics[@"skippedTicks"] = @(_skippedTicks);
     return NO;

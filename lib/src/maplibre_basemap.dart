@@ -83,9 +83,10 @@ class _MapLibreBasemapState extends State<MapLibreBasemap> {
   /// texture layout, so the margin lands centred on the viewport.
   Size? _renderSize;
 
-  /// The camera most recently pushed to the native renderer, treated as the
-  /// camera the current texture contents were rendered with. Stamped only
-  /// when the native side confirms the frame for it is in the texture.
+  /// The camera the texture is showing at composite time, as best this side
+  /// can know it: stamped when a push is *sent* (the handler renders before
+  /// replying, so the frame usually lands before this Flutter frame is
+  /// rasterized) and rolled back if the reply says the render failed.
   MapCamera? _rendered;
 
   /// Newest camera seen while a push was in flight, sent once it resolves.
@@ -167,16 +168,23 @@ class _MapLibreBasemapState extends State<MapLibreBasemap> {
   /// Pushes [camera] to the renderer, at most one call in flight.
   ///
   /// The early return on an unchanged camera is what makes the widget settle.
-  /// Completing a push calls `setState`, which rebuilds, which pushes again —
-  /// so without a stopping condition an idle map drives a permanent loop of
-  /// channel round-trips.
+  /// A completed push can trigger another via the pending queue — so without
+  /// a stopping condition an idle map drives a permanent loop of channel
+  /// round-trips.
   ///
-  /// The native side renders the frame *before* replying, so a `true` result
-  /// means the texture now shows exactly [camera] — stamping `_rendered` here
-  /// is honest. On `false` the texture is unchanged and `_rendered` must stay
-  /// put: the transform then keeps correcting relative to what is actually
-  /// on screen, and the next camera change (or the animation-driven display
-  /// link) repairs the content.
+  /// `_rendered` is stamped at *send* time, not on reply. The native side
+  /// renders the frame inside the handler, so by the time this Flutter frame
+  /// is composited the texture almost always shows [camera] already —
+  /// stamping on reply instead makes the transform assume a one-frame-older
+  /// camera than the texture actually shows, and that error flips sign as
+  /// the reply timing drifts across the frame boundary. On device the
+  /// oscillation reads as stutter (worst at 60Hz), where the send-time
+  /// stamp's occasional one-sided lag is invisible. A failed render rolls
+  /// the stamp back so the transform stays true to the unchanged texture.
+  ///
+  /// Called from build; mutates `_rendered` directly (no setState) so the
+  /// frame being built uses the stamped value. Only the failure rollback
+  /// needs a rebuild, and that path is async.
   void _pushCamera(MapCamera camera) {
     if (_textureId == null) return;
     if (_sameCamera(_rendered, camera)) return;
@@ -191,6 +199,8 @@ class _MapLibreBasemapState extends State<MapLibreBasemap> {
     }
 
     _pushInFlight = true;
+    final previous = _rendered;
+    _rendered = camera;
     final pushClock = Stopwatch()..start();
     _channel
         .setCamera(
@@ -208,7 +218,12 @@ class _MapLibreBasemapState extends State<MapLibreBasemap> {
             _pushToTextureMs = _pushToTextureMs == null
                 ? ms
                 : _pushToTextureMs! * 0.8 + ms * 0.2;
-            setState(() => _rendered = camera);
+          } else if (_sameCamera(_rendered, camera)) {
+            // The render failed and nothing newer was stamped meanwhile: the
+            // texture still shows the pre-push frame, so tell the transform
+            // the truth. The next camera change re-pushes via the sameCamera
+            // guard now failing against [previous].
+            setState(() => _rendered = previous);
           }
 
           final pending = _pendingCamera;
@@ -246,7 +261,6 @@ class _MapLibreBasemapState extends State<MapLibreBasemap> {
 
         final textureId = _textureId;
         final renderSize = _renderSize;
-        final rendered = _rendered;
 
         if (textureId == null || renderSize == null) {
           return const SizedBox.shrink();
@@ -254,10 +268,11 @@ class _MapLibreBasemapState extends State<MapLibreBasemap> {
 
         // Push during build, not post-frame: flutter_map rebuilds this widget
         // in the same frame the gesture moves the camera, so pushing here
-        // starts the native render a full frame earlier. The send is
-        // fire-and-forget async — its setState happens on reply, never
-        // during this build.
+        // starts the native render a full frame earlier. Before reading
+        // `_rendered`, because the push stamps it (send-time stamping) and
+        // this frame's transform must use the stamped value.
         _pushCamera(camera);
+        final rendered = _rendered;
 
         // Draw the texture from the first frame. Waiting for the first camera
         // push to resolve means a failed/slow push hides the map entirely,
