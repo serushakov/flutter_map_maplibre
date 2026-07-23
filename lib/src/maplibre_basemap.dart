@@ -142,6 +142,9 @@ class _MapLibreBasemapState extends State<MapLibreBasemap>
         result.textureId == null ||
         result.backTextureAddress == null) {
       widget.onDiagnostics?.call(result.diagnostics);
+      // On !mounted the native presenter was still created; without this it
+      // sits orphaned at viewport-resolution GPU memory until the next create.
+      _channel.disposeTextures();
       _creating = false;
       return;
     }
@@ -156,6 +159,8 @@ class _MapLibreBasemapState extends State<MapLibreBasemap>
     );
     if (!created) {
       widget.onDiagnostics?.call(_renderer.diagnostics());
+      // The renderer failed but the presenter exists — don't orphan it.
+      _channel.disposeTextures();
       _creating = false;
       return;
     }

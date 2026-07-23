@@ -228,6 +228,8 @@ class FfiBasemapRenderer implements BasemapRenderer {
       _diagnostics['presentError'] = blit;
       return false;
     }
+    // A recovered pipeline must not keep reporting the old failure.
+    _diagnostics.remove('presentError');
     _blitMs = _blitMs == null ? blit : _blitMs! * 0.8 + blit * 0.2;
 
     _updateAvailable = false;
