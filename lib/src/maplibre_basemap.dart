@@ -109,6 +109,12 @@ class _MapLibreBasemapState extends State<MapLibreBasemap>
   /// texture is actually rendered at.
   Size? _renderSize;
 
+  /// The [MapLibreBasemap.overRenderFactor] the live session was created
+  /// with. Session identity — [needsCreate] — is keyed on this alongside
+  /// [_viewportSize] so a factor change is caught even if it lands mid-flight
+  /// against an in-progress [_create] (see [_create]'s stale-callback guard).
+  double? _sessionFactor;
+
   Ticker? _ticker;
   Timer? _insurancePump;
   int _parks = 0;
@@ -130,12 +136,9 @@ class _MapLibreBasemapState extends State<MapLibreBasemap>
       _renderer.setStyle(widget.styleUrl);
       _wake();
     }
-    if (oldWidget.overRenderFactor != widget.overRenderFactor) {
-      // The margin is baked into the texture size at create; a factor change
-      // needs a fresh session. Clearing the stored viewport makes the next
-      // build's needsCreate check schedule it.
-      _viewportSize = null;
-    }
+    // overRenderFactor changes are caught by build's needsCreate comparing
+    // _sessionFactor — factor-aware session identity, race-free even against
+    // an in-flight _create (see _create's stale-callback guard).
   }
 
   @override
@@ -200,12 +203,18 @@ class _MapLibreBasemapState extends State<MapLibreBasemap>
     if (_creating) return;
     // Defense against stale post-frame callbacks: every build during an
     // in-flight create schedules another call, and under jank one can fire
-    // after the create lands. Recreating a live same-size session tears a
-    // working map down into seconds of blank style reload.
+    // after the create lands. Recreating a live same-size, same-factor
+    // session tears a working map down into seconds of blank style reload.
+    // The factor check also matters mid-flight: if overRenderFactor changes
+    // while a create is in progress, that in-flight create must not be
+    // treated as satisfying the new factor once it lands — build's
+    // needsCreate (keyed on _sessionFactor) will schedule a follow-up create,
+    // and this guard must let it through rather than early-returning.
     final existing = _viewportSize;
     if (existing != null &&
         (existing.width - viewport.width).abs() <= 1 &&
-        (existing.height - viewport.height).abs() <= 1) {
+        (existing.height - viewport.height).abs() <= 1 &&
+        _sessionFactor == widget.overRenderFactor) {
       return;
     }
     _creating = true;
@@ -282,6 +291,7 @@ class _MapLibreBasemapState extends State<MapLibreBasemap>
       _textureId = result.textureId;
       _viewportSize = viewport;
       _renderSize = renderSize;
+      _sessionFactor = factor;
     });
     _ticker ??= createTicker(_onTick);
     _wake();
@@ -345,7 +355,8 @@ class _MapLibreBasemapState extends State<MapLibreBasemap>
         final needsCreate =
             current == null ||
             (current.width - viewport.width).abs() > 1 ||
-            (current.height - viewport.height).abs() > 1;
+            (current.height - viewport.height).abs() > 1 ||
+            _sessionFactor != widget.overRenderFactor;
 
         if (needsCreate && viewport.isFinite && !viewport.isEmpty) {
           WidgetsBinding.instance.addPostFrameCallback((_) {

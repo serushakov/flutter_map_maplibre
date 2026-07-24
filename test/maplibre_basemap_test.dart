@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_map/flutter_map.dart';
@@ -748,4 +750,51 @@ void main() {
     expect(renderer.createdWidth, 600);
     expect(renderer.createdHeight, 900);
   });
+
+  testWidgets(
+    'a factor change mid-flight create is retried once the stale create lands',
+    (tester) async {
+      // Hold createTextures open so the first create is still in flight when
+      // the factor changes underneath it.
+      final gate = Completer<void>();
+      installChannelMock(gate: gate.future);
+      controller = MapController();
+
+      await pumpSizedMap(
+        tester,
+        height: 800,
+        fixedViewport: const Size(400, 600),
+        overRenderFactor: 1.0,
+      );
+      // Still gated: the channel round trip hasn't resolved, so the renderer
+      // was never actually asked to create anything yet.
+      expect(renderer.createCalls, 0);
+
+      // Rebuild at the new factor while that first create is still in
+      // flight — build's needsCreate schedules a follow-up call, but it
+      // no-ops against _creating; the retry has to come from the stale
+      // create's own setState landing.
+      await pumpSizedMap(
+        tester,
+        height: 800,
+        fixedViewport: const Size(400, 600),
+        overRenderFactor: 1.5,
+      );
+      expect(renderer.createCalls, 0);
+
+      gate.complete();
+      // The stale (factor 1.0) create resumes, completes the channel round
+      // trip and lands its setState.
+      await tester.pump();
+      await tester.pump();
+      // A build now sees _sessionFactor (1.0) != overRenderFactor (1.5) and
+      // schedules — then runs — the retry create at the live factor.
+      await tester.pump();
+      await tester.pump();
+
+      expect(renderer.createCalls, greaterThanOrEqualTo(2));
+      expect(renderer.createdWidth, 600);
+      expect(renderer.createdHeight, 900);
+    },
+  );
 }
