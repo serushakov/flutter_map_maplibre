@@ -153,6 +153,13 @@ class _MapLibreBasemapState extends State<MapLibreBasemap>
   /// off-quantum; cleared by the next successful render.
   bool _settleForced = false;
 
+  Timer? _settleTimer;
+
+  /// The camera the running settle window was armed against; a build with a
+  /// different camera re-arms, a rebuild with the same camera leaves the
+  /// window running (parent rebuilds must not push settling out forever).
+  MapCamera? _settleArmedFor;
+
   @override
   void didUpdateWidget(MapLibreBasemap oldWidget) {
     super.didUpdateWidget(oldWidget);
@@ -173,6 +180,7 @@ class _MapLibreBasemapState extends State<MapLibreBasemap>
     _ticker?.dispose();
     _insurancePump?.cancel();
     _diagnosticsTimer?.cancel();
+    _settleTimer?.cancel();
     _renderer.dispose();
     _channel.disposeTextures();
     super.dispose();
@@ -373,6 +381,37 @@ class _MapLibreBasemapState extends State<MapLibreBasemap>
     );
   }
 
+  /// One-shot settle: when the camera rests while the rendered frame is
+  /// off-target in zoom or bearing (a pinch ended mid-quantum), land one
+  /// exact render so the map does not rest blurry. Never periodic — after
+  /// the settle render the ticker parks through the unchanged decideSleep
+  /// path (spec criterion 4).
+  void _manageSettle({
+    required bool rendered,
+    required MapCamera? shown,
+    required MapCamera current,
+  }) {
+    if (rendered || !settleOffTarget(rendered: shown, current: current)) {
+      _settleTimer?.cancel();
+      _settleTimer = null;
+      _settleArmedFor = null;
+      return;
+    }
+    final armed = _settleArmedFor;
+    final sameCamera =
+        armed != null &&
+        armed.center == current.center &&
+        armed.zoom == current.zoom &&
+        armed.rotation == current.rotation;
+    if (_settleTimer != null && sameCamera) return; // window keeps running
+    _settleArmedFor = current;
+    _settleTimer?.cancel();
+    _settleTimer = Timer(const Duration(milliseconds: 300), () {
+      if (!mounted) return;
+      setState(() => _settleForced = true);
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final camera = MapCamera.of(context);
@@ -446,6 +485,7 @@ class _MapLibreBasemapState extends State<MapLibreBasemap>
         final rendered = admit && _renderer.render(target);
         if (rendered) _settleForced = false;
         final shown = _renderer.lastRenderedCamera;
+        _manageSettle(rendered: rendered, shown: shown, current: cropped);
 
         // A camera jump cleared the renderer's idle latch; make sure the
         // ticker runs to carry the aftermath (tile loads, fades). A

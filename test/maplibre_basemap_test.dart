@@ -940,4 +940,65 @@ void main() {
 
     expect(renderer.renderCalls, calls + 1); // no margin → no runway → admit
   });
+
+  testWidgets('settle: a mid-quantum zoom rest lands one exact render', (
+    tester,
+  ) async {
+    controller = MapController();
+    await pumpSizedMap(tester, height: 800, overRenderFactor: 1.5);
+    final calls = renderer.renderCalls;
+
+    controller.move(controller.camera.center, 13.03); // below quantum → denied
+    await tester.pump();
+    expect(renderer.renderCalls, calls);
+
+    await tester.pump(const Duration(milliseconds: 350)); // settle window
+    await tester.pump();
+    expect(renderer.renderCalls, calls + 1);
+    expect(renderer.lastRenderedCamera!.zoom, 13.03);
+
+    // One-shot: resting longer must not render again.
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pump();
+    expect(renderer.renderCalls, calls + 1);
+  });
+
+  testWidgets('settle: camera changes re-arm the window', (tester) async {
+    controller = MapController();
+    await pumpSizedMap(tester, height: 800, overRenderFactor: 1.5);
+    final calls = renderer.renderCalls;
+
+    controller.move(controller.camera.center, 13.02);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 200)); // not yet
+    controller.move(controller.camera.center, 13.04); // still sub-quantum
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 200)); // window restarted
+    expect(renderer.renderCalls, calls);
+
+    await tester.pump(const Duration(milliseconds: 150)); // 350 since re-arm
+    await tester.pump();
+    expect(renderer.renderCalls, calls + 1);
+  });
+
+  testWidgets('settle: pure translation staleness never settles', (
+    tester,
+  ) async {
+    controller = MapController();
+    await pumpSizedMap(tester, height: 800, overRenderFactor: 1.5);
+    final calls = renderer.renderCalls;
+
+    final camera = controller.camera;
+    controller.move(
+      camera.screenOffsetToLatLng(
+        camera.nonRotatedSize.center(Offset.zero) + const Offset(30, 0),
+      ),
+      camera.zoom,
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pump();
+
+    expect(renderer.renderCalls, calls); // placed exactly; nothing to settle
+  });
 }
