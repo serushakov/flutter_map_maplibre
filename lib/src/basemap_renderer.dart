@@ -103,6 +103,12 @@ abstract interface class BasemapRenderer {
   /// leaves its work pending: the camera stays jumped-but-unpublished
   /// (which vetoes parking) and the update/repaint flags stay set, so the
   /// next eligible tick or build render lands it.
+  ///
+  /// The window is measured start-to-start (admission to admission), not
+  /// present-to-present, so it does not double-count the GPU-blocking
+  /// render+blit time. A failed render also consumes the window; the
+  /// tick-driven retry may therefore be deferred by up to one cap interval,
+  /// which is acceptable.
   abstract Duration? frameCap;
 
   /// Swaps the style in place. No-op when not ready.

@@ -276,6 +276,7 @@ class FfiBasemapRenderer implements BasemapRenderer {
   /// mln render (blocks until the GPU finishes) + blit-present. True only
   /// when both landed, so callers can treat it as "the front buffer changed".
   bool _renderAndPresent() {
+    _sincePresent.reset();
     final clock = Stopwatch()..start();
     final status = _b.mln_render_session_render_update(_session);
     final elapsedMs = clock.elapsedMicroseconds / 1000.0;
@@ -301,7 +302,6 @@ class FfiBasemapRenderer implements BasemapRenderer {
     _blitMs = _blitMs == null ? blit : _blitMs! * 0.8 + blit * 0.2;
 
     _updateAvailable = false;
-    _sincePresent.reset();
     _frameCount++;
     if (elapsedMs > _maxRenderMs) _maxRenderMs = elapsedMs;
     // First frames pay style load and tile upload; not steady state.
