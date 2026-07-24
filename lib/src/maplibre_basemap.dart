@@ -8,6 +8,7 @@ import 'basemap_renderer.dart';
 import 'ffi/ffi_basemap_renderer.dart';
 import 'lead_bias.dart';
 import 'maplibre_channel.dart';
+import 'render_admission.dart';
 import 'residual_transform.dart';
 import 'under_render.dart';
 import 'viewport_crop.dart';
@@ -44,6 +45,8 @@ class MapLibreBasemap extends StatefulWidget {
     this.frameCap,
     this.applyResidualTransform = true,
     this.overRenderFactor = 1.0,
+    this.admissionGuardPx = 16.0,
+    this.admissionZoomQuantum = 0.05,
     this.fixedViewport,
     this.viewportAlignment = Alignment.bottomCenter,
     this.rendererFactory,
@@ -73,6 +76,17 @@ class MapLibreBasemap extends StatefulWidget {
   /// path, so 1.0 (exact viewport) is the expected value; the margin only
   /// papers over failure frames.
   final double overRenderFactor;
+
+  /// Admission guard band: a camera-driven render is admitted only when the
+  /// viewport comes within this many logical px of the rendered canvas's
+  /// edge (or crosses [admissionZoomQuantum]). Between admissions the
+  /// residual transform places the existing frame — exact under translation.
+  final double admissionGuardPx;
+
+  /// Zoom drift from the rendered frame that admits a render on its own.
+  /// Zooming in never bares the canvas, so without this quantum labels
+  /// would blur indefinitely under coverage-only admission.
+  final double admissionZoomQuantum;
 
   /// When set, the texture viewport is pinned to this size and layout size
   /// changes never recreate the session. Use when the layer's widget is
@@ -128,6 +142,16 @@ class _MapLibreBasemapState extends State<MapLibreBasemap>
   /// The worst [underRenderPx] observed since the last diagnostics poll —
   /// max, not average, since a single bared frame is what a user sees.
   double _underRenderPxMax = 0;
+
+  /// Camera-driven admission counters (cumulative, like [_parks]): how many
+  /// builds rendered vs placed the existing frame. `admits` counts admitted
+  /// attempts, including ones the frame cap then deferred.
+  int _admits = 0;
+  int _admissionSkips = 0;
+
+  /// Set by the settle timer to force one exact render after a gesture ends
+  /// off-quantum; cleared by the next successful render.
+  bool _settleForced = false;
 
   @override
   void didUpdateWidget(MapLibreBasemap oldWidget) {
@@ -194,6 +218,8 @@ class _MapLibreBasemapState extends State<MapLibreBasemap>
         'tickerActive': _ticker?.isActive ?? false,
         'parks': _parks,
         'underRenderPx': _underRenderPxMax,
+        'admits': _admits,
+        'admissionSkips': _admissionSkips,
       });
       _underRenderPxMax = 0;
     });
@@ -305,9 +331,9 @@ class _MapLibreBasemapState extends State<MapLibreBasemap>
   }
 
   /// The camera to render: [cropped] shifted ahead of motion so the fixed
-  /// over-render margin becomes runway for capped frames. Active only when
-  /// a frame cap is set and a margin exists; otherwise returns [cropped]
-  /// itself (same instance — the caller uses identity to detect bias).
+  /// over-render margin becomes runway for capped frames. Active whenever a
+  /// margin exists; otherwise returns [cropped] itself (same instance — the
+  /// caller uses identity to detect bias).
   MapCamera _biasedCamera(MapCamera cropped, Size renderSize) {
     final viewport = cropped.nonRotatedSize;
     final maxBias = Size(
@@ -316,7 +342,7 @@ class _MapLibreBasemapState extends State<MapLibreBasemap>
     );
     final cap = widget.frameCap;
     final now = SchedulerBinding.instance.currentFrameTimeStamp;
-    if (cap == null || maxBias.isEmpty) {
+    if (maxBias.isEmpty) {
       _leadBias.reset();
       _prevBiasCamera = cropped;
       _prevBiasTime = now;
@@ -335,7 +361,11 @@ class _MapLibreBasemapState extends State<MapLibreBasemap>
       travel: travel,
       elapsed: elapsed,
       maxBias: maxBias,
-      leadTime: cap * 2,
+      // Capped: cover one cap interval of staleness with 2x headroom.
+      // Uncapped (admission-gated only): a constant — bias saturates its
+      // clamp at fling speeds regardless, and at follow speeds it is
+      // negligible either way.
+      leadTime: cap == null ? const Duration(milliseconds: 33) : cap * 2,
     );
     if (bias == Offset.zero) return cropped;
     return cropped.withPosition(
@@ -393,7 +423,28 @@ class _MapLibreBasemapState extends State<MapLibreBasemap>
         final cropped = cropCamera(camera, visibleRect);
         final target = _biasedCamera(cropped, renderSize);
         final biased = !identical(target, cropped);
-        final rendered = _renderer.render(target);
+        // The admission gate: render only when the viewport nears the
+        // rendered canvas's runway or crosses a zoom/bearing quantum;
+        // otherwise the residual transform places the existing frame, which
+        // is pixel-exact under translation. Compared against the UNBIASED
+        // current camera — lastRenderedCamera is ground truth for the canvas.
+        final admit =
+            _settleForced ||
+            shouldAdmitRender(
+              rendered: _renderer.lastRenderedCamera,
+              renderSize: renderSize,
+              current: camera,
+              visibleRect: visibleRect,
+              guardPx: widget.admissionGuardPx,
+              zoomQuantum: widget.admissionZoomQuantum,
+            );
+        if (admit) {
+          _admits++;
+        } else {
+          _admissionSkips++;
+        }
+        final rendered = admit && _renderer.render(target);
+        if (rendered) _settleForced = false;
         final shown = _renderer.lastRenderedCamera;
 
         // A camera jump cleared the renderer's idle latch; make sure the

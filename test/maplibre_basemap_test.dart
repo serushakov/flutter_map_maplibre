@@ -520,7 +520,13 @@ void main() {
   });
 
   /// Drive the camera east at ~1875 px/s (30px per 16ms frame) for [frames]
-  /// frames — enough to converge the 100ms-EMA velocity estimate.
+  /// frames — enough to converge the 100ms-EMA velocity estimate. The
+  /// admission gate throttles most of these frames (30px per step is
+  /// usually inside the runway), so it keeps panning at the same per-frame
+  /// rate past [frames] until one is actually admitted — every caller below
+  /// reads [MapLibreBasemap]'s rendered/shown state right after this
+  /// returns, and that assumption (fresh as of the last simulated frame)
+  /// predates the gate.
   Future<void> panEast(WidgetTester tester, {int frames = 25}) async {
     for (var i = 0; i < frames; i++) {
       final cam = controller.camera;
@@ -531,6 +537,22 @@ void main() {
         cam.zoom,
       );
       await tester.pump(const Duration(milliseconds: 16));
+    }
+    // Keep panning at the same per-frame rate past [frames] until one more
+    // is actually admitted, so callers see a fresh rendered/shown state —
+    // capped as a runaway guard, well beyond the ~3 extra frames this
+    // normally takes.
+    for (var i = 0; i < 20; i++) {
+      final callsBefore = renderer.renderCalls;
+      final cam = controller.camera;
+      controller.move(
+        cam.screenOffsetToLatLng(
+          cam.nonRotatedSize.center(Offset.zero) + const Offset(30, 0),
+        ),
+        cam.zoom,
+      );
+      await tester.pump(const Duration(milliseconds: 16));
+      if (renderer.renderCalls != callsBefore) break;
     }
   }
 
@@ -562,26 +584,32 @@ void main() {
     expect(p.dy - 300, closeTo(0, 1));
   });
 
-  testWidgets('no cap means no bias: rendered camera is the plain crop', (
-    tester,
-  ) async {
-    controller = MapController();
-    await pumpSizedMap(
-      tester,
-      height: 800,
-      fixedViewport: const Size(400, 600),
-      overRenderFactor: 1.5,
-    );
-    await panEast(tester);
-    final shown = renderer.lastRenderedCamera!;
-    final cropped = cropCamera(
-      controller.camera,
-      const Rect.fromLTWH(0, 200, 400, 600),
-    );
-    final p = cropped.latLngToScreenOffset(shown.center);
-    expect(p.dx, closeTo(200, 1e-6));
-    expect(p.dy, closeTo(300, 1e-6));
-  });
+  testWidgets(
+    'no cap still biases: the admission gate alone activates the lead '
+    '(leadTime 33ms)',
+    (tester) async {
+      controller = MapController();
+      await pumpSizedMap(
+        tester,
+        height: 800,
+        fixedViewport: const Size(400, 600),
+        overRenderFactor: 1.5,
+      );
+      await panEast(tester);
+
+      // 1875 px/s × 33ms lead = 61.875px east, inside the 85px clamp
+      // (0.85 × 100px half-margin) — same convergence as the capped case,
+      // just with the uncapped constant leadTime from _biasedCamera.
+      final shown = renderer.lastRenderedCamera!;
+      final cropped = cropCamera(
+        controller.camera,
+        const Rect.fromLTWH(0, 200, 400, 600),
+      );
+      final p = cropped.latLngToScreenOffset(shown.center);
+      expect(p.dx - 200, closeTo(61.875, 9));
+      expect(p.dy - 300, closeTo(0, 1));
+    },
+  );
 
   testWidgets('bias freezes when motion stops: no new camera jumps', (
     tester,
@@ -809,4 +837,107 @@ void main() {
       expect(renderer.createdHeight, 900);
     },
   );
+
+  testWidgets('admission: pan within the runway places without rendering', (
+    tester,
+  ) async {
+    controller = MapController();
+    await pumpSizedMap(tester, height: 800, overRenderFactor: 1.5);
+    final calls = renderer.renderCalls;
+
+    // 30px east: slack 100-30 = 70 > guard 16 → denied.
+    final camera = controller.camera;
+    controller.move(
+      camera.screenOffsetToLatLng(
+        camera.nonRotatedSize.center(Offset.zero) + const Offset(30, 0),
+      ),
+      camera.zoom,
+    );
+    await tester.pump();
+
+    expect(renderer.renderCalls, calls); // no new render
+    // Placed by the residual: the transform is not the identity placement.
+    expect(basemapTransform(tester), isNot(Matrix4.identity()));
+  });
+
+  testWidgets('admission: cumulative pans admit once the guard is crossed', (
+    tester,
+  ) async {
+    controller = MapController();
+    await pumpSizedMap(tester, height: 800, overRenderFactor: 1.5);
+    final calls = renderer.renderCalls;
+
+    // 30, 60, 90px total drift → slack 70, 40, 10; only the third admits.
+    for (var i = 1; i <= 3; i++) {
+      final camera = controller.camera;
+      controller.move(
+        camera.screenOffsetToLatLng(
+          camera.nonRotatedSize.center(Offset.zero) + const Offset(30, 0),
+        ),
+        camera.zoom,
+      );
+      await tester.pump();
+    }
+
+    expect(renderer.renderCalls, calls + 1);
+  });
+
+  testWidgets('admission: zoom-in below the quantum denies, at it admits', (
+    tester,
+  ) async {
+    controller = MapController();
+    await pumpSizedMap(tester, height: 800, overRenderFactor: 1.5);
+    final calls = renderer.renderCalls;
+
+    controller.move(controller.camera.center, 13.049);
+    await tester.pump();
+    expect(renderer.renderCalls, calls); // covered + below quantum → denied
+
+    controller.move(controller.camera.center, 13.05);
+    await tester.pump();
+    expect(renderer.renderCalls, calls + 1);
+  });
+
+  testWidgets('admission counters flow through diagnostics', (tester) async {
+    controller = MapController();
+    Map<String, Object?> diag = const {};
+    await pumpSizedMap(
+      tester,
+      height: 800,
+      overRenderFactor: 1.5,
+      onDiagnostics: (d) => diag = d,
+    );
+
+    final camera = controller.camera;
+    controller.move(
+      camera.screenOffsetToLatLng(
+        camera.nonRotatedSize.center(Offset.zero) + const Offset(30, 0),
+      ),
+      camera.zoom,
+    );
+    await tester.pump();
+
+    await tester.pump(const Duration(seconds: 1)); // diagnostics poll
+    expect(diag['admits'], greaterThanOrEqualTo(1)); // the create render
+    expect(diag['admissionSkips'], greaterThanOrEqualTo(1)); // the 30px pan
+  });
+
+  testWidgets('admission: factor 1.0 keeps render-every-change behavior', (
+    tester,
+  ) async {
+    controller = MapController();
+    await pumpSizedMap(tester, height: 800, overRenderFactor: 1.0);
+    final calls = renderer.renderCalls;
+
+    final camera = controller.camera;
+    controller.move(
+      camera.screenOffsetToLatLng(
+        camera.nonRotatedSize.center(Offset.zero) + const Offset(5, 0),
+      ),
+      camera.zoom,
+    );
+    await tester.pump();
+
+    expect(renderer.renderCalls, calls + 1); // no margin → no runway → admit
+  });
 }
