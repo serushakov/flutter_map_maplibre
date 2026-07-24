@@ -6,6 +6,7 @@ import 'package:flutter_map/flutter_map.dart';
 
 import 'basemap_renderer.dart';
 import 'ffi/ffi_basemap_renderer.dart';
+import 'lead_bias.dart';
 import 'maplibre_channel.dart';
 import 'residual_transform.dart';
 import 'viewport_crop.dart';
@@ -112,6 +113,10 @@ class _MapLibreBasemapState extends State<MapLibreBasemap>
   int _parks = 0;
   bool _creating = false;
   Timer? _diagnosticsTimer;
+
+  final _leadBias = LeadBias();
+  MapCamera? _prevBiasCamera;
+  Duration? _prevBiasTime;
 
   @override
   void didUpdateWidget(MapLibreBasemap oldWidget) {
@@ -271,6 +276,45 @@ class _MapLibreBasemapState extends State<MapLibreBasemap>
     _creating = false;
   }
 
+  /// The camera to render: [cropped] shifted ahead of motion so the fixed
+  /// over-render margin becomes runway for capped frames. Active only when
+  /// a frame cap is set and a margin exists; otherwise returns [cropped]
+  /// itself (same instance — the caller uses identity to detect bias).
+  MapCamera _biasedCamera(MapCamera cropped, Size renderSize) {
+    final viewport = cropped.nonRotatedSize;
+    final maxBias = Size(
+      (renderSize.width - viewport.width) / 2,
+      (renderSize.height - viewport.height) / 2,
+    );
+    final cap = widget.frameCap;
+    final now = SchedulerBinding.instance.currentFrameTimeStamp;
+    if (cap == null || maxBias.isEmpty) {
+      _leadBias.reset();
+      _prevBiasCamera = cropped;
+      _prevBiasTime = now;
+      return cropped;
+    }
+    final prev = _prevBiasCamera;
+    final prevTime = _prevBiasTime;
+    final elapsed = prevTime == null ? Duration.zero : now - prevTime;
+    final center = viewport.center(Offset.zero);
+    final travel = prev == null
+        ? Offset.zero
+        : center - cropped.latLngToScreenOffset(prev.center);
+    _prevBiasCamera = cropped;
+    _prevBiasTime = now;
+    final bias = _leadBias.update(
+      travel: travel,
+      elapsed: elapsed,
+      maxBias: maxBias,
+      leadTime: cap * 2,
+    );
+    if (bias == Offset.zero) return cropped;
+    return cropped.withPosition(
+      center: cropped.screenOffsetToLatLng(center + bias),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final camera = MapCamera.of(context);
@@ -314,9 +358,13 @@ class _MapLibreBasemapState extends State<MapLibreBasemap>
 
         // The same-frame render: by the time this build returns, the front
         // buffer shows [visibleRect]'s view of [camera] (on success). No
-        // stamp, no estimate.
+        // stamp, no estimate. Under a frame cap the target is lead-biased
+        // ahead of motion so capped frames keep the leading edge covered.
         _renderer.frameCap = widget.frameCap;
-        final rendered = _renderer.render(cropCamera(camera, visibleRect));
+        final cropped = cropCamera(camera, visibleRect);
+        final target = _biasedCamera(cropped, renderSize);
+        final biased = !identical(target, cropped);
+        final rendered = _renderer.render(target);
         final shown = _renderer.lastRenderedCamera;
 
         // A camera jump cleared the renderer's idle latch; make sure the
@@ -337,7 +385,9 @@ class _MapLibreBasemapState extends State<MapLibreBasemap>
         // already accounts for the size mismatch, no extra translate. First
         // frame before any successful render: draw unplaced rather than
         // hide the map (a hidden map is indistinguishable from a broken
-        // renderer).
+        // renderer). A biased success frame goes through the residual
+        // instead — exact for any rendered/current pair, so no placement
+        // jump at the bias boundary.
         final placed = Matrix4.identity()
           ..translateByDouble(
             visibleRect.left - (renderSize.width - viewport.width) / 2,
@@ -345,7 +395,7 @@ class _MapLibreBasemapState extends State<MapLibreBasemap>
             0,
             1,
           );
-        final transform = (rendered || shown == null)
+        final transform = ((rendered && !biased) || shown == null)
             ? placed
             : widget.applyResidualTransform
             ? residualTransform(

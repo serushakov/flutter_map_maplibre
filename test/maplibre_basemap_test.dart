@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_map_maplibre/flutter_map_maplibre.dart';
 import 'package:flutter_map_maplibre/src/maplibre_channel.dart';
+import 'package:flutter_map_maplibre/src/viewport_crop.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:latlong2/latlong.dart';
 
@@ -179,6 +181,7 @@ void main() {
     required double height,
     Size? fixedViewport,
     double overRenderFactor = 1.0,
+    Duration? frameCap,
   }) async {
     await tester.pumpWidget(
       MaterialApp(
@@ -204,6 +207,7 @@ void main() {
                   styleUrl: 'https://example.com/style.json',
                   fixedViewport: fixedViewport,
                   overRenderFactor: overRenderFactor,
+                  frameCap: frameCap,
                   rendererFactory: () => renderer,
                 ),
               ],
@@ -511,5 +515,120 @@ void main() {
     final translation = basemapTransform(tester).getTranslation();
     expect(translation.x, closeTo(-100, 1e-6));
     expect(translation.y, closeTo(50, 1e-6));
+  });
+
+  /// Drive the camera east at ~1875 px/s (30px per 16ms frame) for [frames]
+  /// frames — enough to converge the 100ms-EMA velocity estimate.
+  Future<void> panEast(WidgetTester tester, {int frames = 25}) async {
+    for (var i = 0; i < frames; i++) {
+      final cam = controller.camera;
+      controller.move(
+        cam.screenOffsetToLatLng(
+          cam.nonRotatedSize.center(Offset.zero) + const Offset(30, 0),
+        ),
+        cam.zoom,
+      );
+      await tester.pump(const Duration(milliseconds: 16));
+    }
+  }
+
+  testWidgets('lead bias: sustained motion shifts the rendered camera ahead', (
+    tester,
+  ) async {
+    controller = MapController();
+    await pumpSizedMap(
+      tester,
+      height: 800,
+      fixedViewport: const Size(400, 600),
+      overRenderFactor: 1.5,
+      frameCap: const Duration(milliseconds: 15),
+    );
+    await panEast(tester);
+
+    // 1875 px/s × 30ms lead = 56.25px east, inside the 85px clamp
+    // (0.85 × 100px half-margin). Measured in the cropped camera's screen:
+    // the rendered center must sit ahead of the crop center.
+    final shown = renderer.lastRenderedCamera!;
+    final cropped = cropCamera(
+      controller.camera,
+      const Rect.fromLTWH(0, 200, 400, 600),
+    );
+    final p = cropped.latLngToScreenOffset(shown.center);
+    // Tolerance 9: EMA convergence residue plus up to the 8px hysteresis
+    // quantum of lag between desired and applied.
+    expect(p.dx - 200, closeTo(56.25, 9));
+    expect(p.dy - 300, closeTo(0, 1));
+  });
+
+  testWidgets('no cap means no bias: rendered camera is the plain crop', (
+    tester,
+  ) async {
+    controller = MapController();
+    await pumpSizedMap(
+      tester,
+      height: 800,
+      fixedViewport: const Size(400, 600),
+      overRenderFactor: 1.5,
+    );
+    await panEast(tester);
+    final shown = renderer.lastRenderedCamera!;
+    final cropped = cropCamera(
+      controller.camera,
+      const Rect.fromLTWH(0, 200, 400, 600),
+    );
+    final p = cropped.latLngToScreenOffset(shown.center);
+    expect(p.dx, closeTo(200, 1e-6));
+    expect(p.dy, closeTo(300, 1e-6));
+  });
+
+  testWidgets('bias freezes when motion stops: no new camera jumps', (
+    tester,
+  ) async {
+    controller = MapController();
+    await pumpSizedMap(
+      tester,
+      height: 800,
+      fixedViewport: const Size(400, 600),
+      overRenderFactor: 1.5,
+      frameCap: const Duration(milliseconds: 15),
+    );
+    await panEast(tester);
+    final settled = renderer.lastRenderedCamera!;
+
+    // Motion stops; a tick-driven rebuild must re-render the SAME camera
+    // (dedup-friendly), not a decayed-bias variant.
+    renderer.tickResult = true;
+    await tester.pump(const Duration(milliseconds: 16));
+    await tester.pump(const Duration(milliseconds: 16));
+    final after = renderer.lastRenderedCamera!;
+    expect(after.center, settled.center);
+    expect(after.zoom, settled.zoom);
+  });
+
+  testWidgets('biased success frame is placed exactly by the residual', (
+    tester,
+  ) async {
+    controller = MapController();
+    await pumpSizedMap(
+      tester,
+      height: 800,
+      fixedViewport: const Size(400, 600),
+      overRenderFactor: 1.5,
+      frameCap: const Duration(milliseconds: 15),
+    );
+    await panEast(tester);
+
+    // Ground truth: pushing a world point through the placement transform
+    // must land it where the current full-layer camera projects it.
+    final shown = renderer.lastRenderedCamera!;
+    final canvas = shown.withNonRotatedSize(const Size(600, 900));
+    final transform = basemapTransform(tester);
+    final point = controller.camera.center;
+    final placed = MatrixUtils.transformPoint(
+      transform,
+      canvas.latLngToScreenOffset(point),
+    );
+    final expected = controller.camera.latLngToScreenOffset(point);
+    expect((placed - expected).distance, lessThan(0.1));
   });
 }
