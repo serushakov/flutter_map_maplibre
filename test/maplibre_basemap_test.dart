@@ -182,6 +182,7 @@ void main() {
     Size? fixedViewport,
     double overRenderFactor = 1.0,
     Duration? frameCap,
+    ValueChanged<Map<String, Object?>>? onDiagnostics,
   }) async {
     await tester.pumpWidget(
       MaterialApp(
@@ -208,6 +209,7 @@ void main() {
                   fixedViewport: fixedViewport,
                   overRenderFactor: overRenderFactor,
                   frameCap: frameCap,
+                  onDiagnostics: onDiagnostics,
                   rendererFactory: () => renderer,
                 ),
               ],
@@ -630,5 +632,120 @@ void main() {
     );
     final expected = controller.camera.latLngToScreenOffset(point);
     expect((placed - expected).distance, lessThan(0.1));
+  });
+
+  testWidgets('capped frame with margin+bias reports underRenderPx 0', (
+    tester,
+  ) async {
+    Map<String, Object?>? latest;
+    // Diagnostics require onDiagnostics; extend pumpSizedMap once more with
+    // an onDiagnostics parameter threaded to the widget.
+    controller = MapController();
+    await pumpSizedMap(
+      tester,
+      height: 800,
+      fixedViewport: const Size(400, 600),
+      overRenderFactor: 1.5,
+      frameCap: const Duration(milliseconds: 15),
+      onDiagnostics: (d) => latest = d,
+    );
+    await panEast(tester);
+
+    // The capped frame: render refused, camera 20px further east — well
+    // inside the ~156px lead runway.
+    renderer.renderResult = false;
+    final cam = controller.camera;
+    controller.move(
+      cam.screenOffsetToLatLng(
+        cam.nonRotatedSize.center(Offset.zero) + const Offset(20, 0),
+      ),
+      cam.zoom,
+    );
+    await tester.pump(const Duration(milliseconds: 16));
+    await tester.pump(const Duration(seconds: 1)); // diagnostics poll
+    expect(latest!['underRenderPx'], closeTo(0, 0.01));
+  });
+
+  testWidgets('capped frame without margin reports the bared strip', (
+    tester,
+  ) async {
+    Map<String, Object?>? latest;
+    controller = MapController();
+    await pumpSizedMap(
+      tester,
+      height: 800,
+      fixedViewport: const Size(400, 600),
+      overRenderFactor: 1.0,
+      frameCap: const Duration(milliseconds: 15),
+      onDiagnostics: (d) => latest = d,
+    );
+    await panEast(tester);
+
+    renderer.renderResult = false;
+    final cam = controller.camera;
+    controller.move(
+      cam.screenOffsetToLatLng(
+        cam.nonRotatedSize.center(Offset.zero) + const Offset(20, 0),
+      ),
+      cam.zoom,
+    );
+    await tester.pump(const Duration(milliseconds: 16));
+    await tester.pump(const Duration(seconds: 1));
+    expect(latest!['underRenderPx'], closeTo(20, 0.5));
+  });
+
+  testWidgets('the underRenderPx max resets after each poll', (tester) async {
+    Map<String, Object?>? latest;
+    controller = MapController();
+    await pumpSizedMap(
+      tester,
+      height: 800,
+      fixedViewport: const Size(400, 600),
+      overRenderFactor: 1.0,
+      frameCap: const Duration(milliseconds: 15),
+      onDiagnostics: (d) => latest = d,
+    );
+    await panEast(tester);
+    renderer.renderResult = false;
+    final cam = controller.camera;
+    controller.move(
+      cam.screenOffsetToLatLng(
+        cam.nonRotatedSize.center(Offset.zero) + const Offset(20, 0),
+      ),
+      cam.zoom,
+    );
+    await tester.pump(const Duration(milliseconds: 16));
+    await tester.pump(const Duration(seconds: 1));
+    expect(latest!['underRenderPx'], closeTo(20, 0.5));
+
+    // A quiet interval: the stat must not stick at its historic max.
+    renderer.renderResult = true;
+    controller.move(controller.camera.center, controller.camera.zoom + 0.01);
+    await tester.pump(const Duration(milliseconds: 16));
+    await tester.pump(const Duration(seconds: 1));
+    expect(latest!['underRenderPx'], closeTo(0, 0.01));
+  });
+
+  testWidgets('changing overRenderFactor recreates the session', (
+    tester,
+  ) async {
+    controller = MapController();
+    await pumpSizedMap(
+      tester,
+      height: 800,
+      fixedViewport: const Size(400, 600),
+      overRenderFactor: 1.0,
+    );
+    expect(renderer.createCalls, 1);
+    await pumpSizedMap(
+      tester,
+      height: 800,
+      fixedViewport: const Size(400, 600),
+      overRenderFactor: 1.5,
+    );
+    await tester.pump();
+    expect(renderer.createCalls, 2);
+    expect(renderer.createdWidth, 600);
+    expect(renderer.createdHeight, 900);
   });
 }

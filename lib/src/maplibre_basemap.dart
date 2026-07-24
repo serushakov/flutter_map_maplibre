@@ -9,6 +9,7 @@ import 'ffi/ffi_basemap_renderer.dart';
 import 'lead_bias.dart';
 import 'maplibre_channel.dart';
 import 'residual_transform.dart';
+import 'under_render.dart';
 import 'viewport_crop.dart';
 
 /// A natively-rendered MapLibre vector basemap, for use as a `flutter_map`
@@ -118,12 +119,22 @@ class _MapLibreBasemapState extends State<MapLibreBasemap>
   MapCamera? _prevBiasCamera;
   Duration? _prevBiasTime;
 
+  /// The worst [underRenderPx] observed since the last diagnostics poll —
+  /// max, not average, since a single bared frame is what a user sees.
+  double _underRenderPxMax = 0;
+
   @override
   void didUpdateWidget(MapLibreBasemap oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.styleUrl != widget.styleUrl) {
       _renderer.setStyle(widget.styleUrl);
       _wake();
+    }
+    if (oldWidget.overRenderFactor != widget.overRenderFactor) {
+      // The margin is baked into the texture size at create; a factor change
+      // needs a fresh session. Clearing the stored viewport makes the next
+      // build's needsCreate check schedule it.
+      _viewportSize = null;
     }
   }
 
@@ -179,7 +190,9 @@ class _MapLibreBasemapState extends State<MapLibreBasemap>
         ..._renderer.diagnostics(),
         'tickerActive': _ticker?.isActive ?? false,
         'parks': _parks,
+        'underRenderPx': _underRenderPxMax,
       });
+      _underRenderPxMax = 0;
     });
   }
 
@@ -403,6 +416,18 @@ class _MapLibreBasemapState extends State<MapLibreBasemap>
                 current: camera,
               )
             : placed;
+
+        // The acceptance instrument for the lead bias: whenever the shown
+        // frame is not this build's camera, measure the bared strip.
+        if (shown != null && (!rendered || biased)) {
+          final uncovered = underRenderPx(
+            rendered: shown,
+            renderSize: renderSize,
+            current: camera,
+            visibleRect: visibleRect,
+          );
+          if (uncovered > _underRenderPxMax) _underRenderPxMax = uncovered;
+        }
 
         return Transform(
           transform: transform,
