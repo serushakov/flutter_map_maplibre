@@ -132,4 +132,41 @@ void main() {
       closeTo(0, 0.01),
     );
   });
+
+  test('renderOvershootPx: negative slack when covered with room', () {
+    // 50px symmetric margin, 30px pan: nearest edge is 50-30=20px away.
+    expect(
+      renderOvershootPx(
+        rendered: base,
+        renderSize: const Size(500, 900),
+        current: pannedEast(base, 30),
+        visibleRect: fullRect,
+      ),
+      closeTo(-20, 0.1),
+    );
+  });
+
+  test('renderOvershootPx: positive overshoot matches underRenderPx', () {
+    expect(
+      renderOvershootPx(
+        rendered: base,
+        renderSize: const Size(500, 900),
+        current: pannedEast(base, 60),
+        visibleRect: fullRect,
+      ),
+      closeTo(10, 0.1),
+    );
+  });
+
+  test('renderOvershootPx: same camera, symmetric margin → slack = margin', () {
+    expect(
+      renderOvershootPx(
+        rendered: base,
+        renderSize: const Size(500, 900),
+        current: base,
+        visibleRect: fullRect,
+      ),
+      closeTo(-50, 0.1),
+    );
+  });
 }
