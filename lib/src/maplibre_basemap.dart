@@ -39,6 +39,7 @@ class MapLibreBasemap extends StatefulWidget {
     super.key,
     required this.styleUrl,
     this.onDiagnostics,
+    this.frameCap,
     this.applyResidualTransform = true,
     this.overRenderFactor = 1.0,
     this.fixedViewport,
@@ -54,6 +55,12 @@ class MapLibreBasemap extends StatefulWidget {
   /// Periodic render statistics, for callers that want to surface or log
   /// them.
   final ValueChanged<Map<String, Object?>>? onDiagnostics;
+
+  /// Minimum interval between presented native frames — the power-saving
+  /// cap (see [BasemapRenderer.frameCap]). Null means uncapped. Only the
+  /// native render rate drops; the Flutter ticker and gesture pipeline are
+  /// unaffected.
+  final Duration? frameCap;
 
   /// Escape hatch for debugging: with this false a failed render is drawn
   /// uncorrected. Never disable in production.
@@ -308,6 +315,7 @@ class _MapLibreBasemapState extends State<MapLibreBasemap>
         // The same-frame render: by the time this build returns, the front
         // buffer shows [visibleRect]'s view of [camera] (on success). No
         // stamp, no estimate.
+        _renderer.frameCap = widget.frameCap;
         final rendered = _renderer.render(cropCamera(camera, visibleRect));
         final shown = _renderer.lastRenderedCamera;
 

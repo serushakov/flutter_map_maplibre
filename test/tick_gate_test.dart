@@ -107,4 +107,38 @@ void main() {
       isFalse,
     );
   });
+
+  test('frame cap: null cap always allows', () {
+    expect(
+      frameCapSatisfied(frameCap: null, sinceLastPresent: Duration.zero),
+      isTrue,
+    );
+  });
+
+  test('frame cap: below the interval defers', () {
+    expect(
+      frameCapSatisfied(
+        frameCap: const Duration(milliseconds: 15),
+        sinceLastPresent: const Duration(milliseconds: 8),
+      ),
+      isFalse,
+    );
+  });
+
+  test('frame cap: at or beyond the interval allows', () {
+    expect(
+      frameCapSatisfied(
+        frameCap: const Duration(milliseconds: 15),
+        sinceLastPresent: const Duration(milliseconds: 15),
+      ),
+      isTrue,
+    );
+    expect(
+      frameCapSatisfied(
+        frameCap: const Duration(milliseconds: 15),
+        sinceLastPresent: const Duration(milliseconds: 17),
+      ),
+      isTrue,
+    );
+  });
 }

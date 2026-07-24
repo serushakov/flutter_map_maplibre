@@ -22,6 +22,9 @@ class _FakeRenderer implements BasemapRenderer {
   int pumpWorkCalls = 0;
 
   @override
+  Duration? frameCap;
+
+  @override
   bool get isReady => true;
 
   @override
@@ -129,6 +132,7 @@ void main() {
   Future<void> pumpMap(
     WidgetTester tester, {
     ValueChanged<Map<String, Object?>>? onDiagnostics,
+    Duration? frameCap,
   }) async {
     controller = MapController();
     await tester.pumpWidget(
@@ -143,6 +147,7 @@ void main() {
             MapLibreBasemap(
               styleUrl: 'https://example.com/style.json',
               onDiagnostics: onDiagnostics,
+              frameCap: frameCap,
               rendererFactory: () => renderer,
             ),
           ],
@@ -476,5 +481,12 @@ void main() {
     await tester.pump(const Duration(seconds: 1));
     expect(latest!['tickerActive'], isFalse);
     expect(latest!['parks'], 1);
+  });
+
+  testWidgets('frameCap is threaded to the renderer before rendering', (
+    tester,
+  ) async {
+    await pumpMap(tester, frameCap: const Duration(milliseconds: 15));
+    expect(renderer.frameCap, const Duration(milliseconds: 15));
   });
 }

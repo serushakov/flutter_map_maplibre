@@ -42,6 +42,13 @@ bool decideSleep({
 }) =>
     idleSinceLastJump && !updateAvailable && !needsRepaint && !unpublishedJump;
 
+/// Whether the power-saving frame cap allows presenting a new frame now.
+/// A null cap (power saving off) always allows.
+bool frameCapSatisfied({
+  required Duration? frameCap,
+  required Duration sinceLastPresent,
+}) => frameCap == null || sinceLastPresent >= frameCap;
+
 /// The native renderer as the basemap widget sees it. One implementation
 /// talks FFI ([FfiBasemapRenderer]); tests inject a fake. The defining
 /// property: [lastRenderedCamera] is ground truth for what the front buffer
@@ -90,6 +97,13 @@ abstract interface class BasemapRenderer {
   /// Owner-thread tasks (tile expiry refreshes) only progress when the queue
   /// is pumped, so a parked widget calls this on a slow timer.
   bool pumpWork();
+
+  /// Minimum interval between presented frames (the power-saving ~60fps
+  /// cap), or null for uncapped. A capped attempt renders nothing and
+  /// leaves its work pending: the camera stays jumped-but-unpublished
+  /// (which vetoes parking) and the update/repaint flags stay set, so the
+  /// next eligible tick or build render lands it.
+  abstract Duration? frameCap;
 
   /// Swaps the style in place. No-op when not ready.
   void setStyle(String styleUrl);

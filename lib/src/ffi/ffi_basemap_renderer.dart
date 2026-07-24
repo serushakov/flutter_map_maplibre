@@ -75,6 +75,15 @@ class FfiBasemapRenderer implements BasemapRenderer {
   int _failStreak = 0;
 
   @override
+  Duration? frameCap;
+
+  /// Time since the last successful present; render() and tick() gate on it
+  /// while [frameCap] is set. Starts at construction so the first render is
+  /// always allowed.
+  final Stopwatch _sincePresent = Stopwatch()..start();
+  int _cappedTicks = 0;
+
+  @override
   bool get isReady => _session != nullptr;
 
   @override
@@ -205,6 +214,18 @@ class FfiBasemapRenderer implements BasemapRenderer {
     _jumpedCamera = camera;
     _idleSinceLastJump = false;
 
+    // Power-saving cap: the jump above is recorded (so the sleep gate stays
+    // vetoed and the ticker keeps running) but the expensive render+present
+    // waits for the cap window. The next eligible tick or build lands it;
+    // meanwhile the widget's residual transform places the stale frame.
+    if (!frameCapSatisfied(
+      frameCap: frameCap,
+      sinceLastPresent: _sincePresent.elapsed,
+    )) {
+      _cappedTicks++;
+      return false;
+    }
+
     final clock = Stopwatch()..start();
     if (!_renderAndPresent()) return false;
     final ms = clock.elapsedMicroseconds / 1000.0;
@@ -234,6 +255,14 @@ class FfiBasemapRenderer implements BasemapRenderer {
         _skippedTicks++;
         return false;
       case TickDecision.render:
+        if (!frameCapSatisfied(
+          frameCap: frameCap,
+          sinceLastPresent: _sincePresent.elapsed,
+        )) {
+          // A deferral, not a skip: flags stay pending for the next tick.
+          _cappedTicks++;
+          return false;
+        }
         if (!_renderAndPresent()) return false;
         _linkRenders++;
         // The content now on screen is whatever camera the map last jumped
@@ -272,6 +301,7 @@ class FfiBasemapRenderer implements BasemapRenderer {
     _blitMs = _blitMs == null ? blit : _blitMs! * 0.8 + blit * 0.2;
 
     _updateAvailable = false;
+    _sincePresent.reset();
     _frameCount++;
     if (elapsedMs > _maxRenderMs) _maxRenderMs = elapsedMs;
     // First frames pay style load and tile upload; not steady state.
@@ -351,6 +381,7 @@ class FfiBasemapRenderer implements BasemapRenderer {
       'cameraRenders': _cameraRenders,
       'linkRenders': _linkRenders,
       'skippedTicks': _skippedTicks,
+      'cappedTicks': _cappedTicks,
       'idleEvents': _idleEvents,
       'needsRepaint': _needsRepaint,
       'drawCalls': _drawCalls,
