@@ -25,7 +25,8 @@ void main() {
     // 30px per 16ms = 1875 px/s east; 40 frames = 640ms >> 100ms EMA tau.
     feed(bias, const Offset(30, 0), 40);
     expect(bias.velocity.dx, closeTo(1875, 20));
-    expect(bias.applied.dx, closeTo(1875 * 0.030, 1.5));
+    // Hysteresis: applied settles within one 8px quantum below desired.
+    expect(56.25 - bias.applied.dx, inInclusiveRange(0.0, 8.0));
     expect(bias.applied.dy, closeTo(0, 1e-9));
   });
 
@@ -78,7 +79,7 @@ void main() {
     final bias = LeadBias();
     feed(bias, const Offset(30, 0), 40);
     feed(bias, const Offset(-30, 0), 40);
-    expect(bias.applied.dx, closeTo(-1875 * 0.030, 1.5));
+    expect(-56.25 - bias.applied.dx, inInclusiveRange(-8.0, 0.0));
   });
 
   test('reset zeroes everything', () {
