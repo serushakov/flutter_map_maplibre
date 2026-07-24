@@ -178,6 +178,7 @@ void main() {
     WidgetTester tester, {
     required double height,
     Size? fixedViewport,
+    double overRenderFactor = 1.0,
   }) async {
     await tester.pumpWidget(
       MaterialApp(
@@ -202,6 +203,7 @@ void main() {
                 MapLibreBasemap(
                   styleUrl: 'https://example.com/style.json',
                   fixedViewport: fixedViewport,
+                  overRenderFactor: overRenderFactor,
                   rendererFactory: () => renderer,
                 ),
               ],
@@ -488,5 +490,26 @@ void main() {
   ) async {
     await pumpMap(tester, frameCap: const Duration(milliseconds: 15));
     expect(renderer.frameCap, const Duration(milliseconds: 15));
+  });
+
+  testWidgets('over-render margin is centered: success placement pulls the '
+      'texture back by half the margin', (tester) async {
+    controller = MapController();
+    await pumpSizedMap(
+      tester,
+      height: 800,
+      fixedViewport: const Size(400, 600),
+      overRenderFactor: 1.5,
+    );
+    // Session renders 1.5x the 400x600 viewport.
+    expect(renderer.createdWidth, 600);
+    expect(renderer.createdHeight, 900);
+
+    // The 400x600 viewport sits bottom-center of the 400x800 layer → the
+    // visible rect starts at (0, 200); the 200x300 margin hangs half on
+    // each side, so the texture's top-left lands at (0-100, 200-150).
+    final translation = basemapTransform(tester).getTranslation();
+    expect(translation.x, closeTo(-100, 1e-6));
+    expect(translation.y, closeTo(50, 1e-6));
   });
 }

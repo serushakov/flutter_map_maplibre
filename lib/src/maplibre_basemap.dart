@@ -325,14 +325,26 @@ class _MapLibreBasemapState extends State<MapLibreBasemap>
         if (!_renderer.canSleep) _wake();
 
         // On success the texture needs only to be moved onto [visibleRect]
-        // (identity when the viewport is unpinned). On failure the residual
-        // places the stale cropped frame in the full layer's frame — the
-        // formula already accounts for the size mismatch, no extra
-        // translate. First frame before any successful render: draw
-        // unplaced rather than hide the map (a hidden map is
-        // indistinguishable from a broken renderer).
+        // (identity when the viewport is unpinned and unenlarged). The
+        // renderer draws the camera centered on the [renderSize] canvas, so
+        // any over-render margin hangs symmetrically around the center and
+        // the placement must pull the texture back by half of it — without
+        // this, an enlarged texture sits offset under the markers on every
+        // admitted frame while capped frames (placed by the residual
+        // formula, which does account for the size) sit right, and the map
+        // visibly jumps between the two. On failure the residual places the
+        // stale cropped frame in the full layer's frame — the formula
+        // already accounts for the size mismatch, no extra translate. First
+        // frame before any successful render: draw unplaced rather than
+        // hide the map (a hidden map is indistinguishable from a broken
+        // renderer).
         final placed = Matrix4.identity()
-          ..translateByDouble(visibleRect.left, visibleRect.top, 0, 1);
+          ..translateByDouble(
+            visibleRect.left - (renderSize.width - viewport.width) / 2,
+            visibleRect.top - (renderSize.height - viewport.height) / 2,
+            0,
+            1,
+          );
         final transform = (rendered || shown == null)
             ? placed
             : widget.applyResidualTransform
