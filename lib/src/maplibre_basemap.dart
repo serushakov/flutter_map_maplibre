@@ -144,10 +144,21 @@ class _MapLibreBasemapState extends State<MapLibreBasemap>
   double _underRenderPxMax = 0;
 
   /// Camera-driven admission counters (cumulative, like [_parks]): how many
-  /// builds rendered vs placed the existing frame. `admits` counts admitted
-  /// attempts, including ones the frame cap then deferred.
+  /// gate DECISIONS rendered vs placed the existing frame. Only builds whose
+  /// camera differs from [_gateCamera] (or where [_settleForced] forces an
+  /// admission) move either counter — a same-camera rebuild (parent rebuild,
+  /// idle tick) touches neither, so these stay an honest count of
+  /// camera-driven admission decisions rather than every build. `admits`
+  /// counts admitted attempts, including ones the frame cap then deferred.
   int _admits = 0;
   int _admissionSkips = 0;
+
+  /// The unbiased `camera` ([MapCamera.of]) the admission gate last
+  /// evaluated — compared against the current build's camera to tell a
+  /// camera-driven build apart from a same-camera rebuild for
+  /// [_admits]/[_admissionSkips]. Updated every build that reaches the gate,
+  /// regardless of outcome.
+  MapCamera? _gateCamera;
 
   /// Set by the settle timer to force one exact render after a gesture ends
   /// off-quantum; cleared by the next successful render.
@@ -331,6 +342,12 @@ class _MapLibreBasemapState extends State<MapLibreBasemap>
       _leadBias.reset();
       _prevBiasCamera = null;
       _prevBiasTime = null;
+      // A settle timer armed against the old session must not fire into the
+      // new one (it would force-admit against a renderer that just reset).
+      _settleTimer?.cancel();
+      _settleTimer = null;
+      _settleArmedFor = null;
+      _settleForced = false;
     });
     _ticker ??= createTicker(_onTick);
     _wake();
@@ -477,11 +494,24 @@ class _MapLibreBasemapState extends State<MapLibreBasemap>
               guardPx: widget.admissionGuardPx,
               zoomQuantum: widget.admissionZoomQuantum,
             );
-        if (admit) {
-          _admits++;
-        } else {
-          _admissionSkips++;
+        // Only count camera-driven gate decisions: a same-camera rebuild
+        // (parent rebuild, idle tick) must not inflate admissionSkips, and a
+        // tick-driven no-op rebuild must not inflate admits. A settle-forced
+        // admission always counts, even though its camera did not move.
+        final gatePrev = _gateCamera;
+        final cameraChanged =
+            gatePrev == null ||
+            gatePrev.center != camera.center ||
+            gatePrev.zoom != camera.zoom ||
+            gatePrev.rotation != camera.rotation;
+        if (cameraChanged || _settleForced) {
+          if (admit) {
+            _admits++;
+          } else {
+            _admissionSkips++;
+          }
         }
+        _gateCamera = camera;
         final rendered = admit && _renderer.render(target);
         if (rendered) _settleForced = false;
         final shown = _renderer.lastRenderedCamera;

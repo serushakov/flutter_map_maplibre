@@ -1001,4 +1001,79 @@ void main() {
 
     expect(renderer.renderCalls, calls); // placed exactly; nothing to settle
   });
+
+  testWidgets(
+    'admission counters: only camera-driven gate decisions move them',
+    (tester) async {
+      controller = MapController();
+      Map<String, Object?> diag = const {};
+      await pumpSizedMap(
+        tester,
+        height: 800,
+        overRenderFactor: 1.5,
+        onDiagnostics: (d) => diag = d,
+      );
+      await tester.pump(const Duration(seconds: 1)); // poll after create
+      final admitsAfterCreate = diag['admits']! as int;
+      final skipsAfterCreate = diag['admissionSkips']! as int;
+
+      // Rebuild the exact same tree at the same camera and size: a parent
+      // rebuild, not a camera-driven decision — neither counter may move.
+      await pumpSizedMap(
+        tester,
+        height: 800,
+        overRenderFactor: 1.5,
+        onDiagnostics: (d) => diag = d,
+      );
+      await tester.pump(const Duration(seconds: 1));
+      expect(diag['admits'], admitsAfterCreate);
+      expect(diag['admissionSkips'], skipsAfterCreate);
+
+      // A denied pan (30px < 100px margin - 16px guard) still increments
+      // admissionSkips, and by exactly one build's worth.
+      final camera = controller.camera;
+      controller.move(
+        camera.screenOffsetToLatLng(
+          camera.nonRotatedSize.center(Offset.zero) + const Offset(30, 0),
+        ),
+        camera.zoom,
+      );
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 1));
+      expect(diag['admissionSkips'], skipsAfterCreate + 1);
+      expect(diag['admits'], admitsAfterCreate);
+    },
+  );
+
+  testWidgets('fling sequence admits ~per-runway, not per-frame (uncapped)', (
+    tester,
+  ) async {
+    controller = MapController();
+    await pumpSizedMap(tester, height: 800, overRenderFactor: 1.5);
+    final callsBefore = renderer.renderCalls;
+
+    // 400-wide map, overRenderFactor 1.5 → margin (600-400)/2 = 100px per
+    // side; guard 16px. 20 successive 30px-east pans (600px total drift)
+    // simulate a fling. Per-frame admission would render on all 20 steps;
+    // instead each admission renders at the fresh camera and so renews up
+    // to ~100px (+ any lead bias) of runway underneath the guard — several
+    // 30px steps then fit inside that runway before the next one runs out,
+    // roughly one admission per ~100px / 30px ≈ 3-4 steps, i.e. ~5-7
+    // admissions across 20 steps. Band kept generous (3-10) to stay robust
+    // to bias/EMA convergence noise.
+    for (var i = 0; i < 20; i++) {
+      final camera = controller.camera;
+      controller.move(
+        camera.screenOffsetToLatLng(
+          camera.nonRotatedSize.center(Offset.zero) + const Offset(30, 0),
+        ),
+        camera.zoom,
+      );
+      await tester.pump();
+    }
+
+    final delta = renderer.renderCalls - callsBefore;
+    expect(delta, greaterThanOrEqualTo(3));
+    expect(delta, lessThanOrEqualTo(10));
+  });
 }
