@@ -292,6 +292,11 @@ class _MapLibreBasemapState extends State<MapLibreBasemap>
       _viewportSize = viewport;
       _renderSize = renderSize;
       _sessionFactor = factor;
+      // A new session has a new margin; a bias frozen against the old
+      // margin must not leak into it.
+      _leadBias.reset();
+      _prevBiasCamera = null;
+      _prevBiasTime = null;
     });
     _ticker ??= createTicker(_onTick);
     _wake();

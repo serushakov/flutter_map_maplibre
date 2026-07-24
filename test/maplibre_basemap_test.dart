@@ -1,11 +1,9 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_map_maplibre/flutter_map_maplibre.dart';
 import 'package:flutter_map_maplibre/src/maplibre_channel.dart';
-import 'package:flutter_map_maplibre/src/viewport_crop.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:latlong2/latlong.dart';
 
@@ -634,6 +632,17 @@ void main() {
     );
     final expected = controller.camera.latLngToScreenOffset(point);
     expect((placed - expected).distance, lessThan(0.1));
+
+    // Self-contained: confirm the bias was actually nonzero, not just that
+    // the placement math happens to be exact for a zero bias too. The
+    // rendered center must sit measurably ahead of the crop center, beyond
+    // the 8px hysteresis quantum.
+    final cropped = cropCamera(
+      controller.camera,
+      const Rect.fromLTWH(0, 200, 400, 600),
+    );
+    final p = cropped.latLngToScreenOffset(shown.center);
+    expect(p.dx - 200, greaterThan(8));
   });
 
   testWidgets('capped frame with margin+bias reports underRenderPx 0', (
@@ -653,13 +662,16 @@ void main() {
     );
     await panEast(tester);
 
-    // The capped frame: render refused, camera 20px further east — well
-    // inside the ~156px lead runway.
+    // The capped frame: render refused, camera 120px further east — beyond
+    // the 100px symmetric margin alone (which would bare a strip), but
+    // still inside the margin+bias runway (~148-156px). If the bias silently
+    // stopped applying, this move would bare the leading edge and the
+    // assertion below would fail.
     renderer.renderResult = false;
     final cam = controller.camera;
     controller.move(
       cam.screenOffsetToLatLng(
-        cam.nonRotatedSize.center(Offset.zero) + const Offset(20, 0),
+        cam.nonRotatedSize.center(Offset.zero) + const Offset(120, 0),
       ),
       cam.zoom,
     );

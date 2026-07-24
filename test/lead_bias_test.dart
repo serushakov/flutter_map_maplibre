@@ -82,6 +82,38 @@ void main() {
     expect(-56.25 - bias.applied.dx, inInclusiveRange(-8.0, 0.0));
   });
 
+  test('a frozen bias is clamped down when the margin shrinks', () {
+    final bias = LeadBias();
+    // Converge against the original 100px-wide margin: applied clamps to
+    // 0.85 × 100 = 85.
+    feed(bias, const Offset(100, 0), 40);
+    expect(bias.applied.dx, closeTo(85, 1));
+
+    // Motion stops and the margin shrinks (session recreate, factor
+    // change): the frozen bias must be re-clamped into the new bounds
+    // rather than carried over from the old ones.
+    final shrunk = bias.update(
+      travel: Offset.zero,
+      elapsed: frame,
+      maxBias: const Size(20, 20),
+      leadTime: lead,
+    );
+    expect(shrunk.dx, closeTo(17, 1e-9)); // 0.85 × 20
+    expect(bias.applied.dx, closeTo(17, 1e-9));
+
+    // The margin grows back to the original size: clamping with larger
+    // bounds is a no-op on the already-shrunk 17, and the zero-travel path
+    // still freezes (returns early) — so it stays at 17, not back at 85.
+    final regrown = bias.update(
+      travel: Offset.zero,
+      elapsed: frame,
+      maxBias: maxBias,
+      leadTime: lead,
+    );
+    expect(regrown.dx, closeTo(17, 1e-9));
+    expect(bias.applied.dx, closeTo(17, 1e-9));
+  });
+
   test('reset zeroes everything', () {
     final bias = LeadBias();
     feed(bias, const Offset(30, 0), 40);

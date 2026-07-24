@@ -13,7 +13,9 @@ import 'dart:ui';
 /// only when the desired bias strays more than [quantumPx], and freezes when
 /// motion stops — a stale bias is harmless (content is correct wherever the
 /// margin sits), while decaying it would keep changing the rendered camera
-/// on a still map and veto the ticker park.
+/// on a still map and veto the ticker park. One exception: the applied bias
+/// is re-clamped to the live margin on every call, so a margin shrink
+/// (session recreate, factor change) can reduce it even while frozen.
 class LeadBias {
   LeadBias({
     this.timeConstant = const Duration(milliseconds: 100),
@@ -59,6 +61,19 @@ class LeadBias {
     required Size maxBias,
     required Duration leadTime,
   }) {
+    // Defense in depth: re-clamp the frozen bias into the current bounds
+    // before the freeze early-return, so a shrunk margin (session recreate,
+    // factor change) shrinks the applied bias even while it's frozen.
+    _applied = Offset(
+      _applied.dx.clamp(
+        -maxBias.width * safetyFactor,
+        maxBias.width * safetyFactor,
+      ),
+      _applied.dy.clamp(
+        -maxBias.height * safetyFactor,
+        maxBias.height * safetyFactor,
+      ),
+    );
     if (elapsed <= Duration.zero || travel == Offset.zero) return _applied;
     final dt = elapsed.inMicroseconds / Duration.microsecondsPerSecond;
     final alpha =
