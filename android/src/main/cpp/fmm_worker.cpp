@@ -14,6 +14,7 @@
 #include <thread>
 #include <vector>
 
+#include <EGL/egl.h>
 #include <maplibre_native_c.h>
 
 #include "dart_api_dl.h"
@@ -168,7 +169,12 @@ class Worker {
   }
 
   void Pump() {
-    if (runtime_ == nullptr) return;
+    if (runtime_ == nullptr) {
+      // Completion symmetry with Render(): every command posts, even
+      // against a dead session, so a facade can never wedge waiting.
+      PostMessage({I(kEvents), I(0), I(0), I(0), I(0), I(0), D(0.0)});
+      return;
+    }
     const double t0 = NowMs();
     mln_runtime_run_once(runtime_);
     const double pump_ms = NowMs() - t0;
@@ -258,6 +264,13 @@ class Worker {
     if (runtime_ != nullptr) {
       mln_runtime_destroy(runtime_);
       runtime_ = nullptr;
+    }
+    // The render path leaves the presenter's context current on this thread;
+    // a context current on a (soon-dead) thread blocks the platform thread's
+    // destroyPresenter cleanup with EGL_BAD_ACCESS. Release before exit.
+    EGLDisplay display = eglGetCurrentDisplay();
+    if (display != EGL_NO_DISPLAY) {
+      eglMakeCurrent(display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
     }
   }
 
