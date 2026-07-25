@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/widgets.dart';
@@ -545,7 +546,18 @@ class _MapLibreBasemapState extends State<MapLibreBasemap>
             0,
             1,
           );
-        final transform = ((rendered && !biased) || shown == null)
+        // The `placed` shortcut assumes a successful render is on screen in
+        // this very frame. That is literally true on iOS (the presenter
+        // hands the buffer to the frame being rasterized) and false on
+        // Android, where eglSwapBuffers queues into a BufferQueue that the
+        // engine latches frames later — the shortcut would pin the texture
+        // as if current while it still shows an older camera, and the map
+        // trails every overlaid marker by the latch latency. There the
+        // residual places what is actually on screen: `shown` runs behind
+        // by FfiBasemapRenderer.androidPresentLatencyFrames presents.
+        final syncPresent = !Platform.isAndroid;
+        final transform =
+            ((rendered && !biased && syncPresent) || shown == null)
             ? placed
             : widget.applyResidualTransform
             ? residualTransform(
@@ -556,7 +568,7 @@ class _MapLibreBasemapState extends State<MapLibreBasemap>
 
         // The acceptance instrument for the lead bias: whenever the shown
         // frame is not this build's camera, measure the bared strip.
-        if (shown != null && (!rendered || biased)) {
+        if (shown != null && (!rendered || biased || !syncPresent)) {
           final uncovered = underRenderPx(
             rendered: shown,
             renderSize: renderSize,

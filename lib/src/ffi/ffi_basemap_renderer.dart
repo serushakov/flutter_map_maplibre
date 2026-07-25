@@ -60,16 +60,24 @@ class FfiBasemapRenderer implements BasemapRenderer {
 
   MapCamera? _lastRenderedCamera;
 
-  /// Android only: the camera of the most recent present, not yet promoted to
-  /// [_lastRenderedCamera]. eglSwapBuffers queues into the BufferQueue and
-  /// the engine latches the buffer one frame later, so the frame just
-  /// presented is NOT what this Flutter frame composites — publishing it
-  /// immediately makes the residual transform assert identity while the
-  /// screen still shows the previous camera, and the basemap visibly trails
-  /// the marker layers by one frame of motion. iOS publishes synchronously:
-  /// its presenter hands the new buffer to the very frame being rasterized
-  /// (verified by the spike's Checkpoint B), so it has no pending stage.
-  MapCamera? _pendingRenderedCamera;
+  /// Android only: how many presents behind the on-screen content runs.
+  ///
+  /// eglSwapBuffers queues into a BufferQueue and the engine latches the
+  /// buffer some frames later, so the frame just presented is NOT what this
+  /// Flutter frame composites — publishing it immediately makes the residual
+  /// transform assert identity while the screen still shows an older camera,
+  /// and the basemap visibly trails the marker layers by that much motion.
+  /// iOS publishes synchronously: its presenter hands the new buffer to the
+  /// very frame being rasterized (verified by the spike's Checkpoint B), so
+  /// it has no pending stage and ignores this. The exact Android depth
+  /// depends on the engine's texture pipeline (ImageReader under Impeller,
+  /// SurfaceTexture under Skia) — tune it empirically: the dot-locked-to-map
+  /// setting is the right one. Mutable at runtime for exactly that purpose.
+  static int androidPresentLatencyFrames = 1;
+
+  /// Android only: cameras of recent presents not yet promoted to
+  /// [_lastRenderedCamera] — a FIFO of depth [androidPresentLatencyFrames].
+  final List<MapCamera> _pendingRenderedCameras = [];
 
   /// What jump_to last set — becomes [_lastRenderedCamera] once a render for
   /// it actually lands (a tick render after a failed camera render publishes
@@ -232,37 +240,37 @@ class FfiBasemapRenderer implements BasemapRenderer {
       a.zoom == b.zoom &&
       a.rotation == b.rotation;
 
-  /// Records a landed render. On Android the previous pending camera is
-  /// promoted first: by the time a new present succeeds, the prior buffer has
-  /// been on screen for at least a frame. The final present of a gesture has
-  /// no successor, so [tick]'s skip branches also promote (one tick = one
-  /// engine frame later — enough for the latch).
+  /// Records a landed render. On Android the camera enters a FIFO whose depth
+  /// models the BufferQueue latch latency; whatever falls off the front has
+  /// certainly reached the screen. The final presents of a gesture have no
+  /// successors to push them out, so [tick]'s skip branches drain one entry
+  /// per tick (one tick = one engine frame — the same cadence as the latch).
   void _publishRendered(MapCamera camera) {
-    if (Platform.isAndroid) {
-      if (_pendingRenderedCamera != null) {
-        _lastRenderedCamera = _pendingRenderedCamera;
+    if (Platform.isAndroid && androidPresentLatencyFrames > 0) {
+      _pendingRenderedCameras.add(camera);
+      while (_pendingRenderedCameras.length > androidPresentLatencyFrames) {
+        _lastRenderedCamera = _pendingRenderedCameras.removeAt(0);
       }
-      _pendingRenderedCamera = camera;
     } else {
       _lastRenderedCamera = camera;
     }
   }
 
   void _promotePendingFrame() {
-    if (_pendingRenderedCamera != null) {
-      _lastRenderedCamera = _pendingRenderedCamera;
-      _pendingRenderedCamera = null;
+    if (_pendingRenderedCameras.isNotEmpty) {
+      _lastRenderedCamera = _pendingRenderedCameras.removeAt(0);
     }
   }
 
   @override
   bool render(MapCamera camera) {
     if (!isReady) return false;
-    // Already rendered it (shown, or queued to show next frame): the settle
+    // Already rendered it (shown, or queued to show shortly): the settle
     // condition, same role as the channel era's sameCamera guard.
-    if (_sameCamera(_pendingRenderedCamera ?? _lastRenderedCamera, camera)) {
-      return true;
-    }
+    final newestRendered = _pendingRenderedCameras.isNotEmpty
+        ? _pendingRenderedCameras.last
+        : _lastRenderedCamera;
+    if (_sameCamera(newestRendered, camera)) return true;
 
     // Drain stale events BEFORE the jump: a MAP_IDLE emitted for the old
     // camera must not survive past it, or the sleep gate would read "idle"
@@ -514,7 +522,7 @@ class FfiBasemapRenderer implements BasemapRenderer {
     _outMap = nullptr;
     _outSession = nullptr;
     _lastRenderedCamera = null;
-    _pendingRenderedCamera = null;
+    _pendingRenderedCameras.clear();
     _jumpedCamera = null;
     _idleSinceLastJump = false;
   }

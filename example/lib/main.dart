@@ -33,6 +33,18 @@ class _MapPageState extends State<MapPage> with SingleTickerProviderStateMixin {
   bool _dark = false;
   Ticker? _ticker;
 
+  /// Android display-latency compensation, in frames. Cycled live so the
+  /// right depth can be found by feel: the setting where the marker locks to
+  /// the map during a pan is the true BufferQueue latch latency.
+  int _latencyFrames = FfiBasemapRenderer.androidPresentLatencyFrames;
+
+  void _cycleLatencyFrames() {
+    setState(() {
+      _latencyFrames = (_latencyFrames + 1) % 4;
+      FfiBasemapRenderer.androidPresentLatencyFrames = _latencyFrames;
+    });
+  }
+
   /// Drives pan, zoom and rotation at once — the condition the residual
   /// transform exists for.
   void _toggleAutoPan() {
@@ -119,6 +131,12 @@ class _MapPageState extends State<MapPage> with SingleTickerProviderStateMixin {
                       child: Icon(
                         _ticker == null ? Icons.play_arrow : Icons.pause,
                       ),
+                    ),
+                    const SizedBox(height: 8),
+                    FloatingActionButton.small(
+                      heroTag: 'latency',
+                      onPressed: _cycleLatencyFrames,
+                      child: Text('$_latencyFrames'),
                     ),
                   ],
                 ),
