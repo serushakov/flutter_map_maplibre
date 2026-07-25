@@ -123,6 +123,19 @@ class FfiBasemapRenderer implements BasemapRenderer {
   final Stopwatch _sincePresent = Stopwatch()..start();
   int _cappedTicks = 0;
 
+  /// The [_sincePresent] reading at the start of the current present —
+  /// how long the presentation pipeline had been idle before it.
+  Duration _gapBeforePresent = Duration.zero;
+
+  /// Presents closer together than this ran against a busy pipeline (raster
+  /// concurrent with the next build), where the engine latches one frame
+  /// late. A present after a longer idle gap is latched the same frame —
+  /// the raster pass runs after the build that queued it. Misclassifying a
+  /// sparse (admission-gated) present as delayed places the old camera for
+  /// one frame while the screen already shows the new drift-corrected
+  /// content: a full-guard-band single-frame jump. ~1.5 frames at 60 Hz.
+  static const _pipelineBusy = Duration(milliseconds: 25);
+
   @override
   bool get isReady => _session != nullptr;
 
@@ -246,12 +259,16 @@ class FfiBasemapRenderer implements BasemapRenderer {
   /// successors to push them out, so [tick]'s skip branches drain one entry
   /// per tick (one tick = one engine frame — the same cadence as the latch).
   void _publishRendered(MapCamera camera) {
-    if (Platform.isAndroid && androidPresentLatencyFrames > 0) {
+    if (Platform.isAndroid &&
+        androidPresentLatencyFrames > 0 &&
+        _gapBeforePresent < _pipelineBusy) {
       _pendingRenderedCameras.add(camera);
       while (_pendingRenderedCameras.length > androidPresentLatencyFrames) {
         _lastRenderedCamera = _pendingRenderedCameras.removeAt(0);
       }
     } else {
+      // Idle pipeline (or iOS): this present is on screen this frame.
+      _pendingRenderedCameras.clear();
       _lastRenderedCamera = camera;
     }
   }
@@ -360,6 +377,7 @@ class FfiBasemapRenderer implements BasemapRenderer {
   /// mln render (blocks until the GPU finishes) + blit-present. True only
   /// when both landed, so callers can treat it as "the front buffer changed".
   bool _renderAndPresent() {
+    _gapBeforePresent = _sincePresent.elapsed;
     _sincePresent.reset();
     final clock = Stopwatch()..start();
     final status = _b.mln_render_session_render_update(_session);
