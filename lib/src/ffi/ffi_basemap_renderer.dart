@@ -164,14 +164,14 @@ class FfiBasemapRenderer implements BasemapRenderer {
   }
 
   @override
-  bool create({
+  Future<bool> create({
     required int backTextureAddress,
     required int presenterId,
     required int width,
     required int height,
     required double scale,
     required String styleUrl,
-  }) {
+  }) async {
     assert(!isReady, 'dispose before re-creating');
     _camera = calloc<mln_camera_options>();
     _event = calloc<mln_runtime_event>();

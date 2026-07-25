@@ -43,14 +43,14 @@ class _FakeRenderer implements BasemapRenderer {
   }
 
   @override
-  bool create({
+  Future<bool> create({
     required int backTextureAddress,
     required int presenterId,
     required int width,
     required int height,
     required double scale,
     required String styleUrl,
-  }) {
+  }) async {
     createCalls++;
     createdWidth = width;
     createdHeight = height;

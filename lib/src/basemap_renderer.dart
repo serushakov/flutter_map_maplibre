@@ -62,10 +62,11 @@ abstract interface class BasemapRenderer {
   /// this is written only after the render + present actually completed.
   MapCamera? get lastRenderedCamera;
 
-  /// Creates runtime, map, and render session on the calling (UI) thread,
-  /// attaching the borrowed back texture. Returns false on failure (details
-  /// land in [diagnostics]).
-  bool create({
+  /// Creates runtime, map, and render session, attaching the borrowed back
+  /// texture. Synchronous on iOS (the future completes before it returns);
+  /// a worker-thread round-trip on Android. Returns false on failure
+  /// (details land in [diagnostics]).
+  Future<bool> create({
     required int backTextureAddress,
     required int presenterId,
     required int width,

@@ -320,7 +320,7 @@ class _MapLibreBasemapState extends State<MapLibreBasemap>
       return;
     }
 
-    final created = _renderer.create(
+    final created = await _renderer.create(
       backTextureAddress: result.backTextureAddress!,
       presenterId: result.textureId!,
       width: renderSize.width.round(),
