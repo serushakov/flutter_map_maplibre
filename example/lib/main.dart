@@ -31,6 +31,7 @@ class _MapPageState extends State<MapPage> with SingleTickerProviderStateMixin {
   final _mapController = MapController();
   Map<String, Object?> _diagnostics = const {};
   bool _dark = false;
+  bool _useWorker = true;
   Ticker? _ticker;
 
   /// Android display-latency compensation, in frames. Cycled live so the
@@ -98,6 +99,7 @@ class _MapPageState extends State<MapPage> with SingleTickerProviderStateMixin {
             options: const MapOptions(initialCenter: _tallinn, initialZoom: 13),
             children: [
               MapLibreBasemap(
+                key: ValueKey('renderer-$_useWorker'),
                 styleUrl: _dark ? _darkStyle : _light,
                 // Margin so the lead bias can keep the leading edge covered
                 // during flicks: on Android the placed frame is one present
@@ -105,6 +107,9 @@ class _MapPageState extends State<MapPage> with SingleTickerProviderStateMixin {
                 // strip without it.
                 overRenderFactor: 1.1,
                 renderScale: _renderScales[_renderScaleIndex],
+                rendererFactory: _useWorker
+                    ? WorkerBasemapRenderer.new
+                    : FfiBasemapRenderer.new,
                 onDiagnostics: (d) {
                   if (mounted) setState(() => _diagnostics = d);
                 },
@@ -163,6 +168,12 @@ class _MapPageState extends State<MapPage> with SingleTickerProviderStateMixin {
                         '${(_renderScales[_renderScaleIndex] * 100).round()}',
                         style: const TextStyle(fontSize: 11),
                       ),
+                    ),
+                    const SizedBox(height: 8),
+                    FloatingActionButton.small(
+                      heroTag: 'renderer',
+                      onPressed: () => setState(() => _useWorker = !_useWorker),
+                      child: Text(_useWorker ? 'wkr' : 'ffi'),
                     ),
                   ],
                 ),
