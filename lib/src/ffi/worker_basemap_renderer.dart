@@ -45,6 +45,12 @@ class WorkerBasemapRenderer implements BasemapRenderer {
 
   WorkerLink? _link;
   ReceivePort? _port;
+  // The port (and its fallback timer) of a session currently being torn
+  // down. Kept separate from [_port] so a stale DESTROYED — or the fallback
+  // firing late — can only ever close ITS OWN session's port, never the
+  // port of a session created after it. At most one teardown is ever
+  // in-flight: [create] closes any leftover eagerly before starting fresh.
+  ReceivePort? _teardownPort;
   Completer<bool>? _createCompleter;
   Timer? _portCloseFallback;
 
@@ -63,6 +69,14 @@ class WorkerBasemapRenderer implements BasemapRenderer {
   bool _idleSinceLastJump = false;
   bool _renderPostedSinceLastTick = false;
   bool _presentedSinceLastTick = false;
+
+  // Pumps posted but not yet resolved by an EVENTS completion, and how many
+  // of those (from the front of the FIFO) predate the most recent camera
+  // jump / style change. An EVENTS resolving a stale pump reports an idle
+  // observation made before that jump — applying it would re-latch
+  // [_idleSinceLastJump] while the new camera's tiles may still be loading.
+  int _pumpsInFlight = 0;
+  int _stalePumps = 0;
 
   @override
   Duration? frameCap;
@@ -117,6 +131,11 @@ class WorkerBasemapRenderer implements BasemapRenderer {
   }) {
     assert(!_ready, 'dispose before re-creating');
     _resetSessionState();
+    // A fresh session never wants a previous one's port around: close it
+    // right here rather than waiting for its DESTROYED (or the 2s fallback)
+    // — late messages on a closed port are dropped by the VM, which is
+    // exactly what we want (see [_teardownPort]'s doc).
+    _closeTeardownPort();
     final link = _makeLink();
     final port = ReceivePort();
     if (!link.start(port.sendPort)) {
@@ -152,6 +171,8 @@ class WorkerBasemapRenderer implements BasemapRenderer {
     _renderPostedSinceLastTick = false;
     _presentedSinceLastTick = false;
     _failStreak = 0;
+    _pumpsInFlight = 0;
+    _stalePumps = 0;
   }
 
   static bool _sameCamera(MapCamera? a, MapCamera b) =>
@@ -165,17 +186,26 @@ class WorkerBasemapRenderer implements BasemapRenderer {
   bool render(MapCamera camera) {
     final link = _link;
     if (!_ready || link == null) return false;
-    // Settled or already in flight: nothing to issue. Unlike the sync
-    // renderer this returns false even when the front buffer already shows
-    // [camera] — the Android widget path never trusts the sync-present
-    // shortcut anyway (syncPresent = false).
+    // Settled: the front buffer already shows [camera] (published, or still
+    // queued in the FIFO to be promoted) — matches the interface contract
+    // ("Returns true when the front buffer now shows it (including the
+    // no-op case where it already did)"), same as
+    // FfiBasemapRenderer.render's early return.
     final newestRendered = _pendingRenderedCameras.isNotEmpty
         ? _pendingRenderedCameras.last
         : _lastRenderedCamera;
-    if (_sameCamera(newestRendered, camera)) return false;
+    if (_sameCamera(newestRendered, camera)) return true;
+    // Already in flight (jumped but not yet rendered/published): nothing new
+    // to issue, and it is not on screen yet.
     if (_sameCamera(_jumpedCamera, camera)) return false;
 
     link.postPump();
+    _pumpsInFlight++;
+    // Every pump currently outstanding (including the one just posted)
+    // predates the jump about to be issued: its eventual EVENTS reports an
+    // idle observation from before this camera, and must not re-latch
+    // _idleSinceLastJump.
+    _stalePumps = _pumpsInFlight;
     _gen++;
     link.postJump(
       lat: camera.center.latitude,
@@ -195,6 +225,7 @@ class WorkerBasemapRenderer implements BasemapRenderer {
       return false;
     }
     _postRender(link, _gen, camera);
+    _renderPostedSinceLastTick = true;
     _cameraRenders++;
     return false;
   }
@@ -204,7 +235,6 @@ class WorkerBasemapRenderer implements BasemapRenderer {
     _inFlight[gen] = camera;
     _issuedAt[gen] = _now;
     link.postRender(gen);
-    _renderPostedSinceLastTick = true;
   }
 
   @override
@@ -212,6 +242,7 @@ class WorkerBasemapRenderer implements BasemapRenderer {
     final link = _link;
     if (!_ready || link == null) return false;
     link.postPump();
+    _pumpsInFlight++;
     final decision = decideTick(
       updateAvailable: _updateAvailable,
       needsRepaint: _needsRepaint,
@@ -251,6 +282,7 @@ class WorkerBasemapRenderer implements BasemapRenderer {
     final link = _link;
     if (!_ready || link == null) return false;
     link.postPump();
+    _pumpsInFlight++;
     // Flags are one round-trip stale; the next insurance-pump tick (or any
     // completion-driven wake) observes the fresh ones.
     return _updateAvailable || _needsRepaint;
@@ -261,6 +293,11 @@ class WorkerBasemapRenderer implements BasemapRenderer {
     final link = _link;
     if (!_ready || link == null) return;
     link.postSetStyle(styleUrl);
+    // Any pump already outstanding predates this style change: its eventual
+    // idle report is stale for the same reason a pre-jump pump's is (see
+    // render()) — a style swap re-requests a repaint just like a camera
+    // jump does.
+    _stalePumps = _pumpsInFlight;
     _idleSinceLastJump = false;
   }
 
@@ -282,11 +319,20 @@ class WorkerBasemapRenderer implements BasemapRenderer {
         if (!ok) _teardownLink();
         completer?.complete(ok);
       case _kEvents:
+        if (_pumpsInFlight > 0) _pumpsInFlight--;
+        // The FIFO + in-order port delivery mean this EVENTS resolves the
+        // oldest outstanding pump: if that pump was marked stale (posted
+        // before the latest jump/style change), its idle observation
+        // predates that change and must not latch _idleSinceLastJump —
+        // still counted in diagnostics, and updates/repaint/drawCalls/pumpMs
+        // still apply (a stale "update available" is safe-sticky).
+        final stale = _stalePumps > 0;
+        if (stale) _stalePumps--;
         if ((list[1] as int) > 0) _updateAvailable = true;
         final idles = list[2] as int;
         if (idles > 0) {
           _idleEvents += idles;
-          _idleSinceLastJump = true;
+          if (!stale) _idleSinceLastJump = true;
         }
         if (list[3] == 1) _needsRepaint = list[4] == 1;
         _drawCalls = list[5] as int;
@@ -305,7 +351,9 @@ class WorkerBasemapRenderer implements BasemapRenderer {
         _issuedAt.remove(gen);
         _superseded++;
       case _kDestroyed:
-        _closePort();
+        // Only ever closes the torn-down session's own port (see
+        // [_teardownPort]'s doc) — never a session created after it.
+        _closeTeardownPort();
     }
   }
 
@@ -411,16 +459,25 @@ class WorkerBasemapRenderer implements BasemapRenderer {
     _link?.postDestroy();
     _link = null;
     _ready = false;
+    // Move the current port to "pending teardown" so a session started
+    // after this one (a later create()) never shares it: this session's
+    // DESTROYED (or the fallback below) can only ever close the port
+    // captured here, never whatever [_port] holds by the time it arrives.
+    // Any teardown already pending is closed first — at most one is ever
+    // in flight, since create() closes it eagerly (see there).
+    _closeTeardownPort();
+    _teardownPort = _port;
+    _port = null;
     // If DESTROYED never arrives (engine teardown races), don't leak the
     // port — an open ReceivePort pins the isolate.
-    _portCloseFallback ??= Timer(const Duration(seconds: 2), _closePort);
+    _portCloseFallback = Timer(const Duration(seconds: 2), _closeTeardownPort);
   }
 
-  void _closePort() {
+  void _closeTeardownPort() {
     _portCloseFallback?.cancel();
     _portCloseFallback = null;
-    _port?.close();
-    _port = null;
+    _teardownPort?.close();
+    _teardownPort = null;
   }
 
   @override

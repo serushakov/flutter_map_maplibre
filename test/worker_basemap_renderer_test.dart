@@ -1,3 +1,4 @@
+import 'dart:isolate';
 import 'dart:ui';
 
 import 'package:flutter_map/flutter_map.dart';
@@ -19,10 +20,15 @@ MapCamera cameraAt(double lat, double lng, {double zoom = 14}) => MapCamera(
 class FakeLink implements WorkerLink {
   final calls = <String>[];
   bool startResult = true;
+  // The real SendPort the renderer wired up, captured so tests that need to
+  // exercise actual ReceivePort delivery (rather than calling
+  // handleCompletion directly) can post to it.
+  SendPort? completions;
 
   @override
-  bool start(completions) {
+  bool start(SendPort completions) {
     calls.add('start');
+    this.completions = completions;
     return startResult;
   }
 
@@ -103,20 +109,28 @@ void main() {
     expect(link.calls.last, 'destroy');
   });
 
-  test(
-    'render posts pump+jump+render and never re-posts the same camera',
-    () async {
-      final link = FakeLink();
-      final renderer = await createdRenderer(link);
-      link.calls.clear();
-      final camera = cameraAt(59.43, 24.75);
-      expect(renderer.render(camera), isFalse); // async: never "on screen now"
-      expect(link.calls, ['pump', 'jump:1', 'render:1']);
-      link.calls.clear();
-      renderer.render(camera); // same camera, still in flight
-      expect(link.calls, isEmpty);
-    },
-  );
+  test('render posts pump+jump+render; returns true once settled, false '
+      'while in flight', () async {
+    final link = FakeLink();
+    final renderer = await createdRenderer(link);
+    link.calls.clear();
+    final camera = cameraAt(59.43, 24.75);
+    // First issue: async, so the front buffer does not show it yet.
+    expect(renderer.render(camera), isFalse);
+    expect(link.calls, ['pump', 'jump:1', 'render:1']);
+    link.calls.clear();
+    // Same camera, still in flight (no RENDERED completion yet): no
+    // re-post, and still not on screen.
+    expect(renderer.render(camera), isFalse);
+    expect(link.calls, isEmpty);
+    // Once the render for it has actually landed, the front buffer shows
+    // it: matches the BasemapRenderer.render doc contract ("Returns true
+    // when the front buffer now shows it (including the no-op case where
+    // it already did)"), same as FfiBasemapRenderer's settled branch.
+    renderer.handleCompletion([2, 1, 0, 10.0, 1.5, 0.1]);
+    expect(renderer.render(camera), isTrue);
+    expect(link.calls, isEmpty);
+  });
 
   test(
     'RENDERED publishes through the latency FIFO on a busy pipeline',
@@ -178,14 +192,42 @@ void main() {
     final renderer = await createdRenderer(link);
     expect(renderer.canSleep, isFalse); // no idle seen yet
     final camera = cameraAt(59.43, 24.75);
-    renderer.render(camera);
+    renderer.render(camera); // posts the pre-jump pump (marked stale)
     renderer.handleCompletion([2, 1, 0, 10.0, 1.5, 0.1]); // publish
-    renderer.tick(); // promote if pending
-    renderer.handleCompletion([1, 0, 1, 1, 0, 50, 0.5]); // EVENTS: idle seen
+    renderer.tick(); // promote if pending; posts a second, non-stale pump
+    // Resolves the pre-jump pump: an idle observation from before the jump
+    // — must not latch idle (see the stale-pump guard).
+    renderer.handleCompletion([1, 0, 1, 1, 0, 50, 0.5]);
+    expect(renderer.canSleep, isFalse);
+    // Resolves tick()'s pump: a genuinely new idle observation latches it.
+    renderer.handleCompletion([1, 0, 1, 0, 0, 50, 0.5]);
     expect(renderer.canSleep, isTrue);
     renderer.handleCompletion([1, 1, 0, 0, 0, 50, 0.5]); // update available
     expect(renderer.canSleep, isFalse);
   });
+
+  test(
+    'a stale pre-jump-pump EVENTS does not latch idle; a fresh one does',
+    () async {
+      final link = FakeLink();
+      var arrival = Duration.zero;
+      final renderer = await createdRenderer(link, arrivalClock: () => arrival);
+      final camera = cameraAt(59.43, 24.75);
+      renderer.render(camera); // posts the pre-jump pump (marked stale)
+      arrival = const Duration(milliseconds: 100); // idle pipeline: publish
+      renderer.handleCompletion([2, 1, 0, 10.0, 1.5, 0.1]); // RENDERED
+      expect(renderer.lastRenderedCamera, isNotNull);
+      // Resolves the pre-jump pump: its idle observation predates the jump
+      // — must not latch _idleSinceLastJump.
+      renderer.handleCompletion([1, 0, 1, 0, 0, 0, 0.1]);
+      expect(renderer.canSleep, isFalse);
+      // A fresh pump posted after the jump (here, by tick()) resolves for
+      // real: its idle observation latches normally.
+      renderer.tick();
+      renderer.handleCompletion([1, 0, 1, 0, 0, 0, 0.1]);
+      expect(renderer.canSleep, isTrue);
+    },
+  );
 
   test('tick returns true only when new content arrived', () async {
     final link = FakeLink();
@@ -225,5 +267,67 @@ void main() {
     renderer.handleCompletion([0, 0, 0, 0, 0]);
     expect(await pending, isTrue);
     expect(link.calls.where((c) => c == 'start').length, 2);
+  });
+
+  test('a stale DESTROYED from a torn-down session cannot kill the next '
+      'session', () async {
+    final link = FakeLink();
+    final renderer = await createdRenderer(link);
+    final firstSessionCompletions = link.completions!;
+    renderer.dispose();
+    // A new session is created before the first session's DESTROYED (or
+    // its 2s fallback) ever lands — create() must close the first
+    // session's port eagerly rather than leaving it for a race.
+    final pending = renderer.create(
+      backTextureAddress: 7,
+      presenterId: 43,
+      width: 400,
+      height: 800,
+      scale: 3.0,
+      styleUrl: 's',
+    );
+    final secondSessionCompletions = link.completions!;
+    renderer.handleCompletion([0, 0, 0, 0, 0]); // second session CREATED
+    expect(await pending, isTrue);
+    // The first session's DESTROYED finally arrives late, through a real
+    // ReceivePort round-trip (not a direct handleCompletion call — the
+    // defect this guards against only shows up when an actual
+    // ReceivePort gets closed). It must affect only the torn-down
+    // session's own (already-closed) port, never the second session's
+    // live one.
+    firstSessionCompletions.send([4]);
+    await Future<void>.delayed(Duration.zero);
+    expect(renderer.isReady, isTrue);
+    // The second session's real port must still be alive and delivering:
+    // a genuine completion sent through it must still be processed.
+    renderer.render(cameraAt(59.43, 24.75));
+    secondSessionCompletions.send([2, 1, 0, 10.0, 1.5, 0.1]);
+    await Future<void>.delayed(Duration.zero);
+    renderer.tick(); // promote out of the busy-pipeline FIFO if pending
+    expect(renderer.lastRenderedCamera, isNotNull);
+  });
+
+  test('tick-driven renders do not alternate skip/render '
+      '(parity with the sync renderer)', () async {
+    final link = FakeLink();
+    final renderer = await createdRenderer(link);
+    renderer.render(cameraAt(59.43, 24.75)); // sets _jumpedCamera
+    // needsRepaint known+true: keeps decideTick returning `render` as
+    // long as renderedSinceLastTick is false.
+    renderer.handleCompletion([1, 0, 0, 1, 1, 0, 0.1]);
+    link.calls.clear();
+    // First tick after render() consumes the render()-set flag: skip.
+    renderer.tick();
+    expect(link.calls, isNot(contains('render:2')));
+    link.calls.clear();
+    // Two consecutive tick()-driven renders must BOTH post RENDER:
+    // tick()'s own render branch must not re-set
+    // _renderPostedSinceLastTick (that would make the next tick skip,
+    // halving the tick-driven rate).
+    renderer.tick();
+    expect(link.calls, contains('render:2'));
+    link.calls.clear();
+    renderer.tick();
+    expect(link.calls, contains('render:3'));
   });
 }
