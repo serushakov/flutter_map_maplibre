@@ -359,16 +359,30 @@ __attribute__((visibility("default"))) double fmm_present(
 
   const double started = nowMs();
 
+  // Cross-context sync. On entry the SESSION's context is still current on
+  // this thread (render_update leaves it that way), so a fence created here
+  // orders everything the session just submitted. Sync objects are shared
+  // across the share group; glWaitSync in our context is a server-side wait —
+  // the GPU serializes, the CPU does not stall (unlike the glFinish this
+  // replaces). No context current (first present, or present-after-fill in
+  // our own context) simply means nothing foreign to wait for.
+  GLsync fence = nullptr;
+  if (eglGetCurrentContext() != EGL_NO_CONTEXT) {
+    fence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+    glFlush();  // The fence must reach the GPU before another context waits.
+  }
+
   // The session runs on its own context; rebind ours before touching the
   // window surface. Textures are shared across the group, surfaces are not.
   if (!eglMakeCurrent(p->display, p->surface, p->surface, p->context)) {
+    if (fence) glDeleteSync(fence);
     return kErrMakeCurrent;
   }
 
-  // Crude cross-context sync: glFinish on the consumer side does not formally
-  // order the producer's commands, so a torn frame is possible. The proper
-  // fix is a glFenceSync created right after render_update.
-  glFinish();
+  if (fence) {
+    glWaitSync(fence, 0, GL_TIMEOUT_IGNORED);
+    glDeleteSync(fence);
+  }
 
   glViewport(0, 0, p->physicalWidth, p->physicalHeight);
   glDisable(GL_BLEND);
