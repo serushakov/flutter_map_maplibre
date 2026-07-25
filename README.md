@@ -96,8 +96,10 @@ Be honest with yourself about this list before shipping it:
 - **Android surface loss.** The port (spec:
   `2026-07-25-flutter-map-maplibre-android-port.md`) renders and pans on a
   physical OnePlus 8 Pro, but a lost `SurfaceProducer` surface (backgrounding)
-  only fails soft — in-place EGL window-surface recreation is still to do, as
-  is replacing the `glFinish` cross-context sync with a fence.
+  only fails soft — in-place EGL window-surface recreation is still to do.
+- **Debug builds feel slow on Android.** JIT Dart makes the per-gesture
+  widget work dominate and reads as map lag. Judge performance only on
+  `--profile` builds.
 - **Physical iOS devices.** The iOS side has run on the simulator only, whose
   Metal is `MTLSimDriver`. maplibre-native-ffi's own CI never executes on an
   iOS device either.

@@ -46,12 +46,14 @@ class MapLibreBasemap extends StatefulWidget {
     this.frameCap,
     this.applyResidualTransform = true,
     this.overRenderFactor = 1.0,
+    this.renderScale = 1.0,
     this.admissionGuardPx = 16.0,
     this.admissionZoomQuantum = 0.05,
     this.fixedViewport,
     this.viewportAlignment = Alignment.bottomCenter,
     this.rendererFactory,
-  }) : assert(overRenderFactor >= 1.0);
+  }) : assert(overRenderFactor >= 1.0),
+       assert(renderScale > 0.0 && renderScale <= 1.0);
 
   /// MapLibre style JSON URL. Changing it swaps the style in place without
   /// tearing down the renderer, which is what makes light/dark switching
@@ -77,6 +79,13 @@ class MapLibreBasemap extends StatefulWidget {
   /// path, so 1.0 (exact viewport) is the expected value; the margin only
   /// papers over failure frames.
   final double overRenderFactor;
+
+  /// Fraction of the device pixel ratio to render at. 1.0 renders native
+  /// resolution; lower trades sharpness for fill-rate — on high-density
+  /// panels (3.5 dpr) 0.7-0.85 is hard to tell apart while cutting fragment
+  /// work by the square. The texture is upscaled by the compositor; camera
+  /// math is unaffected (the map's logical size never changes).
+  final double renderScale;
 
   /// Admission guard band: a camera-driven render is admitted only when the
   /// viewport comes within this many logical px of the rendered canvas's
@@ -129,6 +138,10 @@ class _MapLibreBasemapState extends State<MapLibreBasemap>
   /// [_viewportSize] so a factor change is caught even if it lands mid-flight
   /// against an in-progress [_create] (see [_create]'s stale-callback guard).
   double? _sessionFactor;
+
+  /// The [MapLibreBasemap.renderScale] the live session was created with —
+  /// session identity alongside [_sessionFactor], same staleness rules.
+  double? _sessionScale;
 
   Ticker? _ticker;
   Timer? _insurancePump;
@@ -260,7 +273,8 @@ class _MapLibreBasemapState extends State<MapLibreBasemap>
     if (existing != null &&
         (existing.width - viewport.width).abs() <= 1 &&
         (existing.height - viewport.height).abs() <= 1 &&
-        _sessionFactor == widget.overRenderFactor) {
+        _sessionFactor == widget.overRenderFactor &&
+        _sessionScale == widget.renderScale) {
       return;
     }
     _creating = true;
@@ -338,6 +352,7 @@ class _MapLibreBasemapState extends State<MapLibreBasemap>
       _viewportSize = viewport;
       _renderSize = renderSize;
       _sessionFactor = factor;
+      _sessionScale = widget.renderScale;
       // A new session has a new margin; a bias frozen against the old
       // margin must not leak into it.
       _leadBias.reset();
@@ -437,7 +452,8 @@ class _MapLibreBasemapState extends State<MapLibreBasemap>
     return LayoutBuilder(
       builder: (context, constraints) {
         final layoutSize = constraints.biggest;
-        final devicePixelRatio = MediaQuery.devicePixelRatioOf(context);
+        final devicePixelRatio =
+            MediaQuery.devicePixelRatioOf(context) * widget.renderScale;
 
         // The viewport the session must match: pinned when [fixedViewport]
         // is set, the layout size otherwise. Layout sizes churn every frame
@@ -448,7 +464,8 @@ class _MapLibreBasemapState extends State<MapLibreBasemap>
             current == null ||
             (current.width - viewport.width).abs() > 1 ||
             (current.height - viewport.height).abs() > 1 ||
-            _sessionFactor != widget.overRenderFactor;
+            _sessionFactor != widget.overRenderFactor ||
+            _sessionScale != widget.renderScale;
 
         if (needsCreate && viewport.isFinite && !viewport.isEmpty) {
           WidgetsBinding.instance.addPostFrameCallback((_) {

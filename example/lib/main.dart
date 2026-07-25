@@ -45,6 +45,17 @@ class _MapPageState extends State<MapPage> with SingleTickerProviderStateMixin {
     });
   }
 
+  /// Render-resolution ladder: fraction of native dpr the map renders at.
+  /// Cycling recreates the session (brief style reload) — fine for a knob.
+  static const _renderScales = [1.0, 0.85, 0.7, 0.55];
+  int _renderScaleIndex = 0;
+
+  void _cycleRenderScale() {
+    setState(() {
+      _renderScaleIndex = (_renderScaleIndex + 1) % _renderScales.length;
+    });
+  }
+
   /// Drives pan, zoom and rotation at once — the condition the residual
   /// transform exists for.
   void _toggleAutoPan() {
@@ -88,6 +99,12 @@ class _MapPageState extends State<MapPage> with SingleTickerProviderStateMixin {
             children: [
               MapLibreBasemap(
                 styleUrl: _dark ? _darkStyle : _light,
+                // Margin so the lead bias can keep the leading edge covered
+                // during flicks: on Android the placed frame is one present
+                // old (BufferQueue latch), which bares a velocity x 8.3ms
+                // strip without it.
+                overRenderFactor: 1.1,
+                renderScale: _renderScales[_renderScaleIndex],
                 onDiagnostics: (d) {
                   if (mounted) setState(() => _diagnostics = d);
                 },
@@ -137,6 +154,15 @@ class _MapPageState extends State<MapPage> with SingleTickerProviderStateMixin {
                       heroTag: 'latency',
                       onPressed: _cycleLatencyFrames,
                       child: Text('$_latencyFrames'),
+                    ),
+                    const SizedBox(height: 8),
+                    FloatingActionButton.small(
+                      heroTag: 'scale',
+                      onPressed: _cycleRenderScale,
+                      child: Text(
+                        '${(_renderScales[_renderScaleIndex] * 100).round()}',
+                        style: const TextStyle(fontSize: 11),
+                      ),
                     ),
                   ],
                 ),
