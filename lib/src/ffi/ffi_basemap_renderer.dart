@@ -60,6 +60,17 @@ class FfiBasemapRenderer implements BasemapRenderer {
 
   MapCamera? _lastRenderedCamera;
 
+  /// Android only: the camera of the most recent present, not yet promoted to
+  /// [_lastRenderedCamera]. eglSwapBuffers queues into the BufferQueue and
+  /// the engine latches the buffer one frame later, so the frame just
+  /// presented is NOT what this Flutter frame composites — publishing it
+  /// immediately makes the residual transform assert identity while the
+  /// screen still shows the previous camera, and the basemap visibly trails
+  /// the marker layers by one frame of motion. iOS publishes synchronously:
+  /// its presenter hands the new buffer to the very frame being rasterized
+  /// (verified by the spike's Checkpoint B), so it has no pending stage.
+  MapCamera? _pendingRenderedCamera;
+
   /// What jump_to last set — becomes [_lastRenderedCamera] once a render for
   /// it actually lands (a tick render after a failed camera render publishes
   /// this camera's content).
@@ -82,6 +93,16 @@ class FfiBasemapRenderer implements BasemapRenderer {
   double _steadyMaxMs = 0;
   double? _renderMsInline;
   double? _blitMs;
+
+  /// EWMA / all-time max of one [_pumpEvents] run_once call (see the timing
+  /// note there).
+  double? _pumpMs;
+  double _pumpMsMax = 0;
+
+  /// Same treatment for mln_map_jump_to, to rule it in or out when pump and
+  /// render times don't add up to an observed stall.
+  double? _jumpMs;
+  double _jumpMsMax = 0;
   int _drawCalls = 0;
   int _failStreak = 0;
 
@@ -211,12 +232,37 @@ class FfiBasemapRenderer implements BasemapRenderer {
       a.zoom == b.zoom &&
       a.rotation == b.rotation;
 
+  /// Records a landed render. On Android the previous pending camera is
+  /// promoted first: by the time a new present succeeds, the prior buffer has
+  /// been on screen for at least a frame. The final present of a gesture has
+  /// no successor, so [tick]'s skip branches also promote (one tick = one
+  /// engine frame later — enough for the latch).
+  void _publishRendered(MapCamera camera) {
+    if (Platform.isAndroid) {
+      if (_pendingRenderedCamera != null) {
+        _lastRenderedCamera = _pendingRenderedCamera;
+      }
+      _pendingRenderedCamera = camera;
+    } else {
+      _lastRenderedCamera = camera;
+    }
+  }
+
+  void _promotePendingFrame() {
+    if (_pendingRenderedCamera != null) {
+      _lastRenderedCamera = _pendingRenderedCamera;
+      _pendingRenderedCamera = null;
+    }
+  }
+
   @override
   bool render(MapCamera camera) {
     if (!isReady) return false;
-    // Already showing it: the settle condition, same role as the channel
-    // era's sameCamera guard.
-    if (_sameCamera(_lastRenderedCamera, camera)) return true;
+    // Already rendered it (shown, or queued to show next frame): the settle
+    // condition, same role as the channel era's sameCamera guard.
+    if (_sameCamera(_pendingRenderedCamera ?? _lastRenderedCamera, camera)) {
+      return true;
+    }
 
     // Drain stale events BEFORE the jump: a MAP_IDLE emitted for the old
     // camera must not survive past it, or the sleep gate would read "idle"
@@ -231,7 +277,11 @@ class FfiBasemapRenderer implements BasemapRenderer {
     _camera.ref.longitude = camera.center.longitude;
     _camera.ref.zoom = maplibreZoom(camera.zoom);
     _camera.ref.bearing = maplibreBearing(camera.rotation);
+    final jumpClock = Stopwatch()..start();
     _b.mln_map_jump_to(_map, _camera);
+    final jumpMs = jumpClock.elapsedMicroseconds / 1000.0;
+    _jumpMs = _jumpMs == null ? jumpMs : _jumpMs! * 0.8 + jumpMs * 0.2;
+    if (jumpMs > _jumpMsMax) _jumpMsMax = jumpMs;
     _b.mln_map_request_repaint(_map);
     _jumpedCamera = camera;
     _idleSinceLastJump = false;
@@ -257,7 +307,7 @@ class FfiBasemapRenderer implements BasemapRenderer {
 
     _cameraRenders++;
     _renderedSinceLastTick = true;
-    _lastRenderedCamera = camera;
+    _publishRendered(camera);
     return true;
   }
 
@@ -274,6 +324,10 @@ class FfiBasemapRenderer implements BasemapRenderer {
     switch (decision) {
       case TickDecision.skipIdle:
       case TickDecision.skipRenderedThisFrame:
+        // A skipped tick is one engine frame after whatever was presented
+        // last — the buffer is latched by now, so the trailing pending
+        // camera (the gesture's final frame) can be published.
+        _promotePendingFrame();
         _skippedTicks++;
         return false;
       case TickDecision.render:
@@ -287,10 +341,10 @@ class FfiBasemapRenderer implements BasemapRenderer {
         }
         if (!_renderAndPresent()) return false;
         _linkRenders++;
-        // The content now on screen is whatever camera the map last jumped
+        // The content just presented is whatever camera the map last jumped
         // to — which matters after a failed camera render, where this tick
         // is the retry that lands it.
-        if (_jumpedCamera != null) _lastRenderedCamera = _jumpedCamera;
+        if (_jumpedCamera != null) _publishRendered(_jumpedCamera!);
         return true;
     }
   }
@@ -352,7 +406,15 @@ class FfiBasemapRenderer implements BasemapRenderer {
   /// set here, cleared only by a successful render — per-tick clearing would
   /// lose updates that arrive while a render is skipped.
   void _pumpEvents() {
+    // Timed because run_once executes MapLibre's queued owner-thread tasks
+    // (tile parse, layout, placement) synchronously on the UI thread —
+    // during zoom churn this, not render_update, is where stall time hides,
+    // and it otherwise shows up only as unexplained Flutter build time.
+    final clock = Stopwatch()..start();
     _b.mln_runtime_run_once(_runtime);
+    final ms = clock.elapsedMicroseconds / 1000.0;
+    _pumpMs = _pumpMs == null ? ms : _pumpMs! * 0.8 + ms * 0.2;
+    if (ms > _pumpMsMax) _pumpMsMax = ms;
     while (true) {
       _event.ref.size = sizeOf<mln_runtime_event>();
       _hasEvent.value = false;
@@ -414,6 +476,10 @@ class FfiBasemapRenderer implements BasemapRenderer {
       },
       if (_renderMsInline != null) 'renderMsInline': _round2(_renderMsInline!),
       if (_blitMs != null) 'blitMs': _round2(_blitMs!),
+      if (_pumpMs != null) 'pumpMs': _round2(_pumpMs!),
+      if (_pumpMsMax > 0) 'pumpMsMax': _round2(_pumpMsMax),
+      if (_jumpMs != null) 'jumpMs': _round2(_jumpMs!),
+      if (_jumpMsMax > 0) 'jumpMsMax': _round2(_jumpMsMax),
     };
   }
 
@@ -448,6 +514,7 @@ class FfiBasemapRenderer implements BasemapRenderer {
     _outMap = nullptr;
     _outSession = nullptr;
     _lastRenderedCamera = null;
+    _pendingRenderedCamera = null;
     _jumpedCamera = null;
     _idleSinceLastJump = false;
   }
