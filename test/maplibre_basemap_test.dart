@@ -1003,6 +1003,40 @@ void main() {
   });
 
   testWidgets(
+    'settle: forced admission issues exactly once even when the render '
+    'fails to land',
+    (tester) async {
+      controller = MapController();
+      await pumpSizedMap(tester, height: 800, overRenderFactor: 1.5);
+      final calls = renderer.renderCalls;
+
+      controller.move(controller.camera.center, 13.03); // sub-quantum
+      await tester.pump();
+      expect(renderer.renderCalls, calls);
+
+      // The async renderer never returns true while a render is in flight;
+      // settle must clear on issue, not on landing, or it would re-force
+      // every subsequent build forever.
+      renderer.renderResult = false;
+      await tester.pump(const Duration(milliseconds: 350)); // settle window
+      await tester.pump();
+      expect(
+        renderer.renderCalls,
+        calls + 1,
+        reason: 'the settle-forced render is issued exactly once',
+      );
+
+      // A same-camera, tick-driven rebuild must not re-force a settle
+      // render: _settleForced already cleared on issue, and the settle
+      // window itself keeps running rather than re-arming.
+      renderer.tickResult = true;
+      await tester.pump(const Duration(milliseconds: 16));
+      await tester.pump(const Duration(milliseconds: 16));
+      expect(renderer.renderCalls, calls + 1);
+    },
+  );
+
+  testWidgets(
     'admission counters: only camera-driven gate decisions move them',
     (tester) async {
       controller = MapController();

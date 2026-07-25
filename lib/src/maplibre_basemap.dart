@@ -7,6 +7,7 @@ import 'package:flutter_map/flutter_map.dart';
 
 import 'basemap_renderer.dart';
 import 'ffi/ffi_basemap_renderer.dart';
+import 'ffi/worker_basemap_renderer.dart';
 import 'lead_bias.dart';
 import 'maplibre_channel.dart';
 import 'render_admission.dart';
@@ -122,7 +123,13 @@ class _MapLibreBasemapState extends State<MapLibreBasemap>
     with SingleTickerProviderStateMixin {
   final _channel = MapLibreChannel();
   late final BasemapRenderer _renderer =
-      (widget.rendererFactory ?? FfiBasemapRenderer.new)();
+      (widget.rendererFactory ?? _defaultRenderer)();
+
+  /// Android renders on the worker thread (admitted renders cost ~10ms and
+  /// must not block the UI thread); iOS keeps the validated synchronous
+  /// same-frame path.
+  static BasemapRenderer _defaultRenderer() =>
+      Platform.isAndroid ? WorkerBasemapRenderer() : FfiBasemapRenderer();
 
   int? _textureId;
 
@@ -531,7 +538,10 @@ class _MapLibreBasemapState extends State<MapLibreBasemap>
         }
         _gateCamera = camera;
         final rendered = admit && _renderer.render(target);
-        if (rendered) _settleForced = false;
+        // Cleared on issue, not on landing: the async renderer returns
+        // false while a render is in flight, and a lost render is already
+        // covered by the unpublished-jump sleep veto and tick retries.
+        if (admit) _settleForced = false;
         final shown = _renderer.lastRenderedCamera;
         _manageSettle(rendered: rendered, shown: shown, current: cropped);
 
