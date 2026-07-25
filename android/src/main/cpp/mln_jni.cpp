@@ -4,10 +4,13 @@
 // Split of responsibilities:
 //   - JNI (platform thread): presenter lifecycle. Builds EGL objects, the GL
 //     back texture MapLibre renders into, and the blit program — then UNBINDS
-//     the context, because from that point on it lives on the Dart UI thread.
-//   - FFI (Dart UI thread): fmm_attach / fmm_present / fmm_debug_fill. All
-//     mln_* calls happen on the Dart side or inside fmm_attach, so the map's
-//     owner thread is the Dart UI thread by construction.
+//     the context, because from that point on it lives on the map's owner
+//     thread.
+//   - FFI (map's owner thread): fmm_attach / fmm_present / fmm_debug_fill. All
+//     mln_* calls happen on the caller's thread or inside fmm_attach, so the
+//     map's owner thread is whichever thread calls these by construction —
+//     the Dart UI thread for the synchronous renderer, the render worker
+//     thread for WorkerBasemapRenderer (see fmm_worker.cpp).
 //
 // MapLibre renders into a texture we own (mln_opengl_borrowed_texture_attach),
 // which we then blit onto the SurfaceProducer window surface. The
@@ -181,7 +184,9 @@ Java_com_veduapp_flutter_1map_1maplibre_MlnNative_nativeAndroidInit(
 
 // Platform thread. Returns the GL back-texture name (> 0) on success, or a
 // negative step code identifying the failing stage. The EGL context is left
-// unbound: it becomes current on the Dart UI thread via fmm_attach.
+// unbound: it becomes current on the map's owner thread via fmm_attach — the
+// Dart UI thread for the synchronous renderer, the render worker thread for
+// WorkerBasemapRenderer (see fmm_worker.cpp).
 JNIEXPORT jlong JNICALL
 Java_com_veduapp_flutter_1map_1maplibre_MlnNative_nativePresenterCreate(
     JNIEnv* env, jclass, jlong presenterId, jobject jsurface, jint width,
@@ -273,8 +278,10 @@ Java_com_veduapp_flutter_1map_1maplibre_MlnNative_nativePresenterCreate(
   }
   p->texUniform = glGetUniformLocation(p->program, "u_tex");
 
-  // Hand the context off to the Dart UI thread: an EGL context can be current
-  // on one thread at a time, and every later call happens over there.
+  // Hand the context off to the map's owner thread: an EGL context can be
+  // current on one thread at a time, and every later call happens over
+  // there — the Dart UI thread for the synchronous renderer, the render
+  // worker thread for WorkerBasemapRenderer (see fmm_worker.cpp).
   eglMakeCurrent(p->display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
 
   {
@@ -308,13 +315,15 @@ Java_com_veduapp_flutter_1map_1maplibre_MlnNative_nativePresenterDestroy(
   destroyPresenter(p);
 }
 
-// --- FFI, called from the Dart UI thread ---------------------------------
+// --- FFI, called from the map's owner thread ------------------------------
+// (the Dart UI thread for the synchronous renderer, the render worker thread
+// for WorkerBasemapRenderer; see fmm_worker.cpp)
 
 // Attaches the presenter's back texture to the map as an OpenGL borrowed
 // texture render target. The descriptor's handles are all process-global
 // native objects, so it is built here rather than marshalled through Dart.
-// Runs on the caller's (Dart UI) thread — the same thread that created the
-// map — satisfying mln's owner-thread affinity. Leaves our context current.
+// Runs on the caller's thread — the same thread that created the map —
+// satisfying mln's owner-thread affinity. Leaves our context current.
 __attribute__((visibility("default"))) int32_t fmm_attach(
     int64_t map, int64_t presenterId, int64_t* outSession) {
   auto* p = findPresenter(presenterId);

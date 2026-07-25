@@ -42,7 +42,10 @@ class _MapPageState extends State<MapPage> with SingleTickerProviderStateMixin {
   void _cycleLatencyFrames() {
     setState(() {
       _latencyFrames = (_latencyFrames + 1) % 4;
+      // Both renderers share this knob's meaning and default (1 frame); keep
+      // them in lockstep so the FAB affects whichever one is active.
       FfiBasemapRenderer.androidPresentLatencyFrames = _latencyFrames;
+      WorkerBasemapRenderer.presentLatencyFrames = _latencyFrames;
     });
   }
 

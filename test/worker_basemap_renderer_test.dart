@@ -109,6 +109,27 @@ void main() {
     expect(link.calls.last, 'destroy');
   });
 
+  test('create tolerates a failed initial style: completes true and stays '
+      'ready', () async {
+    final link = FakeLink();
+    final renderer = WorkerBasemapRenderer(link: link);
+    final pending = renderer.create(
+      backTextureAddress: 7,
+      presenterId: 42,
+      width: 400,
+      height: 800,
+      scale: 3.0,
+      styleUrl: 's',
+    );
+    // style_status (index 3) failed; runtime/map/attach all OK. This degrades
+    // soft, matching the sync renderer and the worker's own teardown
+    // condition, both of which exclude style status from the fail check.
+    renderer.handleCompletion([0, 0, 0, 7, 0]);
+    expect(await pending, isTrue);
+    expect(renderer.isReady, isTrue);
+    expect(link.calls, isNot(contains('destroy')));
+  });
+
   test('render posts pump+jump+render; returns true once settled, false '
       'while in flight', () async {
     final link = FakeLink();

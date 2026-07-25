@@ -130,6 +130,10 @@ class WorkerBasemapRenderer implements BasemapRenderer {
     required String styleUrl,
   }) {
     assert(!_ready, 'dispose before re-creating');
+    assert(
+      _createCompleter == null,
+      'create() while a previous create is pending',
+    );
     _resetSessionState();
     // A fresh session never wants a previous one's port around: close it
     // right here rather than waiting for its DESTROYED (or the 2s fallback)
@@ -283,8 +287,8 @@ class WorkerBasemapRenderer implements BasemapRenderer {
     if (!_ready || link == null) return false;
     link.postPump();
     _pumpsInFlight++;
-    // Flags are one round-trip stale; the next insurance-pump tick (or any
-    // completion-driven wake) observes the fresh ones.
+    // Flags are one round-trip stale: this pump's own EVENTS reply hasn't
+    // landed yet, so the next 5s insurance poll is what observes them fresh.
     return _updateAvailable || _needsRepaint;
   }
 
@@ -312,7 +316,11 @@ class WorkerBasemapRenderer implements BasemapRenderer {
         _diagnostics['mapCreateStatus'] = list[2];
         _diagnostics['setStyleStatus'] = list[3];
         _diagnostics['attachStatus'] = list[4];
-        final ok = list[1] == 0 && list[2] == 0 && list[3] == 0 && list[4] == 0;
+        // Style-load failure degrades soft: the sync renderer's readiness
+        // check and the worker's own teardown condition both exclude it, so
+        // a session can come up (and later reload its style) even if the
+        // initial style failed to apply.
+        final ok = list[1] == 0 && list[2] == 0 && list[4] == 0;
         _ready = ok;
         final completer = _createCompleter;
         _createCompleter = null;

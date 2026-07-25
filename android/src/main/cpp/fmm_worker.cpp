@@ -45,7 +45,8 @@ constexpr int32_t kCameraZoom = 1 << 1;
 constexpr int32_t kCameraBearing = 1 << 2;
 constexpr int32_t kMapModeContinuous = 0;
 
-// Local failure codes (never overlap mln statuses, which are >= 0).
+// Local failure codes, chosen outside mln_status's 0..-5 range so they never
+// overlap a real mln status.
 constexpr int32_t kErrNoSession = -100;
 
 double NowMs() {
@@ -142,7 +143,13 @@ class Worker {
     mln_runtime_options options = mln_runtime_options_default();
     options.cache_path = ":memory:";
     int32_t runtime_status = mln_runtime_create(&options, &runtime_);
-    int32_t map_status = -1, style_status = -1, attach_status = -1;
+    // -1000 marks "stage not attempted" — kept well outside mln_status's
+    // 0..-5 range (unlike -1, which collides with
+    // MLN_STATUS_INVALID_ARGUMENT). The Dart side only ever checks == 0, so
+    // this sentinel choice is not part of the wire ABI.
+    constexpr int32_t kNotAttempted = -1000;
+    int32_t map_status = kNotAttempted, style_status = kNotAttempted,
+            attach_status = kNotAttempted;
     if (runtime_status == kStatusOk) {
       mln_map_options map_options = mln_map_options_default();
       map_options.width = cmd.width;
@@ -244,6 +251,9 @@ class Worker {
     if (status == kStatusOk) blit_rc = fmm_present(presenter_id_);
     PostMessage({I(kRendered), I(cmd.gen), I(status), D(render_ms),
                  D(blit_rc), D(last_jump_ms_)});
+    // jumpMs means "jump cost attributable to this frame" — clear it once
+    // reported so a later, jump-free RENDERED doesn't re-report a stale cost.
+    last_jump_ms_ = 0;
   }
 
   void SetStyle(const Command& cmd) {
