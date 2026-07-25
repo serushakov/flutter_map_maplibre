@@ -1,4 +1,5 @@
 import 'dart:ffi';
+import 'dart:io';
 
 import 'package:ffi/ffi.dart';
 import 'package:flutter/foundation.dart';
@@ -7,6 +8,7 @@ import 'package:flutter_map/flutter_map.dart';
 import '../basemap_renderer.dart';
 import '../camera_conventions.dart';
 import 'maplibre_bindings.dart';
+import 'mln_library.dart';
 
 // ABI constants from the vendored headers, kept local so the generated
 // bindings' enum shape doesn't matter (ffigen generates enums as ints).
@@ -20,6 +22,7 @@ const _cameraOptionBearing = 1 << 2; // MLN_CAMERA_OPTION_BEARING
 const _mapModeContinuous = 0; // MLN_MAP_MODE_CONTINUOUS
 
 typedef _PresentNative = Double Function(Int64);
+typedef _AttachNative = Int32 Function(Int64, Int64, Pointer<Int64>);
 
 /// [BasemapRenderer] over maplibre_native_c via dart:ffi.
 ///
@@ -30,9 +33,17 @@ typedef _PresentNative = Double Function(Int64);
 class FfiBasemapRenderer implements BasemapRenderer {
   FfiBasemapRenderer();
 
-  static final MaplibreBindings _b = MaplibreBindings(DynamicLibrary.process());
-  static final double Function(int) _present = DynamicLibrary.process()
+  static final MaplibreBindings _b = MaplibreBindings(mlnLibrary);
+  static final double Function(int) _present = mlnLibrary
       .lookupFunction<_PresentNative, double Function(int)>('fmm_present');
+
+  /// Android only: builds the OpenGL borrowed-texture descriptor natively
+  /// (its fields are all process-global EGL handles Dart would only shuttle
+  /// through) and attaches. Resolved lazily so iOS never looks it up.
+  static final int Function(int, int, Pointer<Int64>) _attachOpenGl = mlnLibrary
+      .lookupFunction<_AttachNative, int Function(int, int, Pointer<Int64>)>(
+        'fmm_attach',
+      );
 
   Pointer<mln_runtime> _runtime = nullptr;
   Pointer<mln_map> _map = nullptr;
@@ -159,18 +170,29 @@ class FfiBasemapRenderer implements BasemapRenderer {
     calloc.free(styleNative);
     _b.mln_map_request_repaint(_map);
 
-    final descriptor = calloc<mln_metal_borrowed_texture_descriptor>();
-    descriptor.ref = _b.mln_metal_borrowed_texture_descriptor_default();
-    descriptor.ref.extent.width = width;
-    descriptor.ref.extent.height = height;
-    descriptor.ref.extent.scale_factor = scale;
-    descriptor.ref.texture = Pointer<Void>.fromAddress(backTextureAddress);
-    final attachStatus = _b.mln_metal_borrowed_texture_attach(
-      _map,
-      descriptor,
-      _outSession,
-    );
-    calloc.free(descriptor);
+    final int attachStatus;
+    if (Platform.isAndroid) {
+      // The presenter (keyed by the Flutter texture id) holds the EGL handles
+      // and the GL back texture; backTextureAddress is just its GL name and
+      // never dereferenced here.
+      final outSession = calloc<Int64>();
+      attachStatus = _attachOpenGl(_map.address, presenterId, outSession);
+      _outSession.value = Pointer.fromAddress(outSession.value);
+      calloc.free(outSession);
+    } else {
+      final descriptor = calloc<mln_metal_borrowed_texture_descriptor>();
+      descriptor.ref = _b.mln_metal_borrowed_texture_descriptor_default();
+      descriptor.ref.extent.width = width;
+      descriptor.ref.extent.height = height;
+      descriptor.ref.extent.scale_factor = scale;
+      descriptor.ref.texture = Pointer<Void>.fromAddress(backTextureAddress);
+      attachStatus = _b.mln_metal_borrowed_texture_attach(
+        _map,
+        descriptor,
+        _outSession,
+      );
+      calloc.free(descriptor);
+    }
     _diagnostics['attachStatus'] = attachStatus;
     if (attachStatus != _statusOk) return _failCreate();
     _session = _outSession.value;

@@ -9,9 +9,9 @@ import 'package:latlong2/latlong.dart';
 void main() => runApp(const ExampleApp());
 
 const _tallinn = LatLng(59.437, 24.7536);
-const _light = 'https://tiles.api.veduapp.com/styles/osm-liberty/style.json';
-const _darkStyle =
-    'https://tiles.api.veduapp.com/styles/osm-liberty-dark/style.json';
+// OpenFreeMap: full-planet OSM vector tiles, open infrastructure, no API key.
+const _light = 'https://tiles.openfreemap.org/styles/liberty';
+const _darkStyle = 'https://tiles.openfreemap.org/styles/dark';
 
 class ExampleApp extends StatelessWidget {
   const ExampleApp({super.key});

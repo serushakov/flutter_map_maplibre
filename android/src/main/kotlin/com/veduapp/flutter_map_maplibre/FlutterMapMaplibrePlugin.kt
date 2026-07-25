@@ -4,7 +4,13 @@ import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.view.TextureRegistry
+import kotlin.math.roundToInt
 
+/**
+ * Cold path only: texture/presenter lifecycle. The hot path — camera pushes,
+ * render_update, present — happens on the Dart UI thread via dart:ffi against
+ * the presenter this class registers (see mln_jni.cpp).
+ */
 class FlutterMapMaplibrePlugin :
     FlutterPlugin,
     MethodChannel.MethodCallHandler {
@@ -13,10 +19,8 @@ class FlutterMapMaplibrePlugin :
     private lateinit var textureRegistry: TextureRegistry
     private var androidInitStatus: Int? = null
 
-    // Held so the texture survives past the probe call; the example app keeps
-    // showing it. Throwaway probe code — no lifecycle management beyond this.
+    /** One presenter per plugin instance, same as the iOS plugin. */
     private var producer: TextureRegistry.SurfaceProducer? = null
-    private var renderer: MapLibreRenderer? = null
 
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         channel = MethodChannel(binding.binaryMessenger, "flutter_map_maplibre/probe")
@@ -34,107 +38,94 @@ class FlutterMapMaplibrePlugin :
         result: MethodChannel.Result
     ) {
         when (call.method) {
-            "runProbe" -> handleRunProbe(call, result)
-            "runMap" -> handleRunMap(call, result)
-            "setCamera" -> {
-                renderer?.setCamera(
-                    call.argument<Double>("lat") ?: 0.0,
-                    call.argument<Double>("lng") ?: 0.0,
-                    call.argument<Double>("zoom") ?: 13.0,
-                    call.argument<Double>("bearing") ?: 0.0
-                )
-                result.success(null)
-            }
-            "setStyle" -> {
-                call.argument<String>("styleUrl")?.let { renderer?.setStyle(it) }
-                result.success(null)
-            }
-            "mapDiagnostics" -> result.success(renderer?.diagnostics() ?: emptyMap<String, Any?>())
-            "disposeMap" -> {
-                renderer?.destroy()
-                renderer = null
+            "createTextures" -> handleCreateTextures(call, result)
+            "disposeTextures" -> {
+                disposePresenter()
                 result.success(null)
             }
             else -> result.notImplemented()
         }
     }
 
-    /** Clear-to-red probe: validates the Flutter texture contract alone. */
-    private fun handleRunProbe(call: MethodCall, result: MethodChannel.Result) {
+    private fun handleCreateTextures(call: MethodCall, result: MethodChannel.Result) {
         val width = call.argument<Int>("width") ?: 0
         val height = call.argument<Int>("height") ?: 0
+        val scale = call.argument<Double>("scale") ?: 1.0
+
+        // The widget recreates on resize; a stale presenter here is a leak.
+        disposePresenter()
 
         try {
             val surfaceProducer = textureRegistry.createSurfaceProducer()
-            surfaceProducer.setSize(width, height)
-            producer = surfaceProducer
-
-            val diagnostics = EglProbe().run(surfaceProducer.surface, width, height)
-            val ok = diagnostics["success"] as? Boolean ?: false
-
-            result.success(
-                mapOf(
-                    "ok" to ok,
-                    "textureId" to if (ok) surfaceProducer.id() else null,
-                    "error" to diagnostics["error"],
-                    "diagnostics" to diagnostics
-                )
+            surfaceProducer.setSize(
+                (width * scale).roundToInt(),
+                (height * scale).roundToInt()
             )
-        } catch (e: Exception) {
-            result.error("PROBE_THREW", e.message, null)
-        }
-    }
+            val presenterId = surfaceProducer.id()
 
-    private fun handleRunMap(call: MethodCall, result: MethodChannel.Result) {
-        val width = call.argument<Int>("width") ?: 512
-        val height = call.argument<Int>("height") ?: 512
-        val scale = call.argument<Double>("scale") ?: 2.0
-        val styleUrl = call.argument<String>("styleUrl")
-            ?: "https://tiles.api.veduapp.com/styles/osm-liberty/style.json"
-
-        // One basemap per plugin instance; replacing tears the old one down.
-        renderer?.destroy()
-
-        try {
-            val created = MapLibreRenderer(textureRegistry) { id ->
-                // Every rendered frame: tell Flutter the texture changed.
-                // SurfaceProducer signals the engine itself, so this is a no-op
-                // hook kept for symmetry with iOS.
-            }
-            renderer = created
-
-            val ok = created.start(width, height, scale, styleUrl)
-            if (!ok) {
-                created.destroy()
-                renderer = null
+            val created = MlnNative.nativePresenterCreate(
+                presenterId,
+                surfaceProducer.surface,
+                width,
+                height,
+                scale
+            )
+            if (created <= 0) {
+                surfaceProducer.release()
                 result.success(
                     mapOf(
                         "ok" to false,
-                        "error" to "nativeCreate returned 0",
-                        "diagnostics" to emptyMap<String, Any?>()
+                        "error" to "nativePresenterCreate step $created",
+                        "diagnostics" to mapOf(
+                            "presenterCreateStep" to created,
+                            "androidInitStatus" to androidInitStatus
+                        )
                     )
                 )
                 return
             }
 
+            surfaceProducer.setCallback(object : TextureRegistry.SurfaceProducer.Callback {
+                override fun onSurfaceAvailable() {}
+
+                // Backgrounding etc. — the EGL window surface is dead. MVP:
+                // fmm_present fails soft with kErrSurfaceLost and the Dart
+                // failure-streak path surfaces it; in-place surface
+                // recreation is a follow-up.
+                override fun onSurfaceCleanup() {
+                    MlnNative.nativePresenterInvalidate(presenterId)
+                }
+            })
+
+            producer = surfaceProducer
             result.success(
                 mapOf(
                     "ok" to true,
-                    "textureId" to created.textureId,
-                    "diagnostics" to created.diagnostics() +
-                        mapOf("androidInitStatus" to androidInitStatus)
+                    "textureId" to presenterId,
+                    // GL texture name, not an address: Dart treats it as an
+                    // opaque token on Android (fmm_attach holds the real
+                    // handles natively).
+                    "backTexture" to created,
+                    "diagnostics" to mapOf(
+                        "androidInitStatus" to androidInitStatus
+                    )
                 )
             )
         } catch (e: Throwable) {
-            result.error("MAP_THREW", e.message, null)
+            result.error("CREATE_TEXTURES_THREW", e.message, null)
         }
+    }
+
+    private fun disposePresenter() {
+        producer?.let {
+            MlnNative.nativePresenterDestroy(it.id())
+            it.release()
+        }
+        producer = null
     }
 
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         channel.setMethodCallHandler(null)
-        renderer?.destroy()
-        renderer = null
-        producer?.release()
-        producer = null
+        disposePresenter()
     }
 }

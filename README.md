@@ -93,10 +93,12 @@ fling case.
 
 Be honest with yourself about this list before shipping it:
 
-- **Android.** Entirely unimplemented. The path is `mln_opengl_surface_attach`
-  with an `EGLSurface` made from a `TextureRegistry.SurfaceProducer` surface —
-  validated by a clear-to-red probe, but no map yet.
-- **Physical devices.** Everything here has run on the iOS simulator, whose
+- **Android surface loss.** The port (spec:
+  `2026-07-25-flutter-map-maplibre-android-port.md`) renders and pans on a
+  physical OnePlus 8 Pro, but a lost `SurfaceProducer` surface (backgrounding)
+  only fails soft — in-place EGL window-surface recreation is still to do, as
+  is replacing the `glFinish` cross-context sync with a fence.
+- **Physical iOS devices.** The iOS side has run on the simulator only, whose
   Metal is `MTLSimDriver`. maplibre-native-ffi's own CI never executes on an
   iOS device either.
 - **Attribution.** `MLNMapView` provides MapLibre/OSM attribution for free; a

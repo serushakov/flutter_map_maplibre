@@ -1,22 +1,34 @@
-// JNI shim over maplibre-native-ffi for Android.
+// Native half of the Android FFI architecture (see
+// docs/superpowers/specs/2026-07-25-flutter-map-maplibre-android-port.md).
 //
-// Mirrors the iOS MLNBridge: all EGL and MapLibre calls live here in C++, and
-// Kotlin only drives the loop. Doing EGL here rather than in Kotlin keeps the
-// context, the surface and the render session owned by one thread with no
-// handle marshalling.
+// Split of responsibilities:
+//   - JNI (platform thread): presenter lifecycle. Builds EGL objects, the GL
+//     back texture MapLibre renders into, and the blit program — then UNBINDS
+//     the context, because from that point on it lives on the Dart UI thread.
+//   - FFI (Dart UI thread): fmm_attach / fmm_present / fmm_debug_fill. All
+//     mln_* calls happen on the Dart side or inside fmm_attach, so the map's
+//     owner thread is the Dart UI thread by construction.
 //
 // MapLibre renders into a texture we own (mln_opengl_borrowed_texture_attach),
-// which we then blit onto the window surface. The surface-session path does not
-// work here: the session creates its own context in our share group, and while
-// a share group shares texture objects it does NOT share window surfaces, so
-// the session renders into its own default framebuffer and our swap presents an
-// untouched buffer. Textures cross the share group; surfaces do not.
+// which we then blit onto the SurfaceProducer window surface. The
+// surface-session path does not work here: the session creates its own context
+// in our share group, and while a share group shares texture objects it does
+// NOT share window surfaces, so the session renders into its own default
+// framebuffer and our swap presents an untouched buffer.
+//
+// No buffer ring, unlike the iOS TexturePresenter: the SurfaceProducer's
+// BufferQueue is the swapchain, and eglSwapBuffers publishes only completed
+// frames. render_update leaves the session's context current on the calling
+// thread, so present re-binds ours first.
 
 #include <android/native_window.h>
 #include <android/native_window_jni.h>
 #include <jni.h>
 
-#include <string>
+#include <cstdint>
+#include <ctime>
+#include <mutex>
+#include <unordered_map>
 
 #include <EGL/egl.h>
 #include <GLES3/gl3.h>
@@ -44,35 +56,50 @@ out vec4 fragColor;
 void main() { fragColor = texture(u_tex, v_uv); }
 )";
 
-struct Renderer {
+// fmm_present / fmm_attach error codes (negative so present can share the
+// "blit ms or negative" return convention with iOS).
+constexpr double kErrUnknownPresenter = -2;
+constexpr double kErrMakeCurrent = -3;
+constexpr double kErrSwapFailed = -4;
+constexpr double kErrSurfaceLost = -5;
+
+struct Presenter {
   ANativeWindow* window = nullptr;
   EGLDisplay display = EGL_NO_DISPLAY;
   EGLConfig config = nullptr;
   EGLContext context = EGL_NO_CONTEXT;
   EGLSurface surface = EGL_NO_SURFACE;
 
-  GLuint texture = 0;
-  GLuint program = 0;
+  GLuint texture = 0;   // The borrowed texture MapLibre renders into.
+  GLuint program = 0;   // Blit: texture -> window surface.
   GLint texUniform = -1;
+  GLuint fillFbo = 0;   // Scratch FBO for fmm_debug_fill only.
 
+  int logicalWidth = 0;
+  int logicalHeight = 0;
+  double scale = 1.0;
   int physicalWidth = 0;
   int physicalHeight = 0;
 
-  mln_runtime* runtime = nullptr;
-  mln_map* map = nullptr;
-  mln_render_session* session = nullptr;
-
-  int frameCount = 0;
-  int lastStatus = 0;
-  int attachStatus = -99;
-  int swapped = -1;
-  int glError = 0;
-  bool styleLoaded = false;
-  std::string lastEventMessage;
+  // Set from the platform thread when the SurfaceProducer invalidates its
+  // surface; checked (not locked — a stale read costs one extra frame) on the
+  // Dart thread.
+  bool surfaceLost = false;
 };
 
-Renderer* asRenderer(jlong handle) {
-  return reinterpret_cast<Renderer*>(handle);
+// Keyed by Flutter texture id, so the FFI shims (called from Dart with no
+// instance context) can reach the presenter. Same shape as the iOS
+// PresenterRegistry.
+std::mutex gPresentersMutex;
+std::unordered_map<int64_t, Presenter*>& presenters() {
+  static auto* map = new std::unordered_map<int64_t, Presenter*>();
+  return *map;
+}
+
+Presenter* findPresenter(int64_t id) {
+  std::lock_guard<std::mutex> lock(gPresentersMutex);
+  auto it = presenters().find(id);
+  return it == presenters().end() ? nullptr : it->second;
 }
 
 GLuint compileShader(GLenum type, const char* source) {
@@ -111,24 +138,32 @@ GLuint buildBlitProgram() {
   return program;
 }
 
-void destroyRenderer(Renderer* r) {
-  if (!r) return;
-  if (r->session) mln_render_session_destroy(r->session);
-  if (r->map) mln_map_destroy(r->map);
-  if (r->runtime) mln_runtime_destroy(r->runtime);
-  if (r->display != EGL_NO_DISPLAY) {
-    if (r->context != EGL_NO_CONTEXT) {
-      eglMakeCurrent(r->display, r->surface, r->surface, r->context);
-      if (r->program) glDeleteProgram(r->program);
-      if (r->texture) glDeleteTextures(1, &r->texture);
+// Destroys EGL/GL state. The context may still be "current" on the Dart
+// thread as a stale binding; EGL defers actual deletion until it is unbound,
+// and the next presenter's makeCurrent replaces the binding.
+void destroyPresenter(Presenter* p) {
+  if (!p) return;
+  if (p->display != EGL_NO_DISPLAY) {
+    if (p->context != EGL_NO_CONTEXT &&
+        eglMakeCurrent(p->display, p->surface, p->surface, p->context)) {
+      if (p->fillFbo) glDeleteFramebuffers(1, &p->fillFbo);
+      if (p->program) glDeleteProgram(p->program);
+      if (p->texture) glDeleteTextures(1, &p->texture);
+      eglMakeCurrent(p->display, EGL_NO_SURFACE, EGL_NO_SURFACE,
+                     EGL_NO_CONTEXT);
     }
-    eglMakeCurrent(r->display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
-    if (r->surface != EGL_NO_SURFACE) eglDestroySurface(r->display, r->surface);
-    if (r->context != EGL_NO_CONTEXT) eglDestroyContext(r->display, r->context);
-    eglTerminate(r->display);
+    if (p->surface != EGL_NO_SURFACE) eglDestroySurface(p->display, p->surface);
+    if (p->context != EGL_NO_CONTEXT) eglDestroyContext(p->display, p->context);
+    eglTerminate(p->display);
   }
-  if (r->window) ANativeWindow_release(r->window);
-  delete r;
+  if (p->window) ANativeWindow_release(p->window);
+  delete p;
+}
+
+double nowMs() {
+  timespec ts{};
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return ts.tv_sec * 1000.0 + ts.tv_nsec / 1.0e6;
 }
 
 }  // namespace
@@ -144,30 +179,36 @@ Java_com_veduapp_flutter_1map_1maplibre_MlnNative_nativeAndroidInit(
   return mln_android_init(env, clazz, context);
 }
 
+// Platform thread. Returns the GL back-texture name (> 0) on success, or a
+// negative step code identifying the failing stage. The EGL context is left
+// unbound: it becomes current on the Dart UI thread via fmm_attach.
 JNIEXPORT jlong JNICALL
-Java_com_veduapp_flutter_1map_1maplibre_MlnNative_nativeCreate(
-    JNIEnv* env, jclass, jobject jsurface, jint width, jint height,
-    jdouble scale, jstring jstyleUrl) {
-  auto* r = new Renderer();
+Java_com_veduapp_flutter_1map_1maplibre_MlnNative_nativePresenterCreate(
+    JNIEnv* env, jclass, jlong presenterId, jobject jsurface, jint width,
+    jint height, jdouble scale) {
+  auto* p = new Presenter();
+  p->logicalWidth = width;
+  p->logicalHeight = height;
+  p->scale = scale;
+  p->physicalWidth = static_cast<int>(width * scale + 0.5);
+  p->physicalHeight = static_cast<int>(height * scale + 0.5);
 
-  r->physicalWidth = static_cast<int>(width * scale + 0.5);
-  r->physicalHeight = static_cast<int>(height * scale + 0.5);
-
-  r->window = ANativeWindow_fromSurface(env, jsurface);
-  if (!r->window) {
-    destroyRenderer(r);
-    return 0;
+  p->window = ANativeWindow_fromSurface(env, jsurface);
+  if (!p->window) {
+    destroyPresenter(p);
+    return -1;
   }
 
-  r->display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
-  if (r->display == EGL_NO_DISPLAY || !eglInitialize(r->display, nullptr, nullptr)) {
-    destroyRenderer(r);
-    return 0;
+  p->display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
+  if (p->display == EGL_NO_DISPLAY ||
+      !eglInitialize(p->display, nullptr, nullptr)) {
+    destroyPresenter(p);
+    return -2;
   }
 
   // EGL_PBUFFER_BIT is required by the FFI for texture sessions (the session
-  // needs a surfaceless-ish context of its own); EGL_WINDOW_BIT is required for
-  // our own blit target. The config must satisfy both.
+  // needs a surfaceless-ish context of its own); EGL_WINDOW_BIT is required
+  // for our own blit target. The config must satisfy both.
   const EGLint configAttrs[] = {EGL_RENDERABLE_TYPE,
                                 EGL_OPENGL_ES3_BIT,
                                 EGL_SURFACE_TYPE,
@@ -186,232 +227,212 @@ Java_com_veduapp_flutter_1map_1maplibre_MlnNative_nativeCreate(
                                 8,
                                 EGL_NONE};
   EGLint numConfigs = 0;
-  if (!eglChooseConfig(r->display, configAttrs, &r->config, 1, &numConfigs) ||
+  if (!eglChooseConfig(p->display, configAttrs, &p->config, 1, &numConfigs) ||
       numConfigs == 0) {
-    destroyRenderer(r);
-    return 0;
+    destroyPresenter(p);
+    return -3;
   }
 
   const EGLint contextAttrs[] = {EGL_CONTEXT_CLIENT_VERSION, 3, EGL_NONE};
-  r->context =
-      eglCreateContext(r->display, r->config, EGL_NO_CONTEXT, contextAttrs);
-  if (r->context == EGL_NO_CONTEXT) {
-    destroyRenderer(r);
-    return 0;
+  p->context =
+      eglCreateContext(p->display, p->config, EGL_NO_CONTEXT, contextAttrs);
+  if (p->context == EGL_NO_CONTEXT) {
+    destroyPresenter(p);
+    return -4;
   }
 
-  r->surface =
-      eglCreateWindowSurface(r->display, r->config, r->window, nullptr);
-  if (r->surface == EGL_NO_SURFACE) {
-    destroyRenderer(r);
-    return 0;
+  p->surface =
+      eglCreateWindowSurface(p->display, p->config, p->window, nullptr);
+  if (p->surface == EGL_NO_SURFACE) {
+    destroyPresenter(p);
+    return -5;
   }
 
-  if (!eglMakeCurrent(r->display, r->surface, r->surface, r->context)) {
-    destroyRenderer(r);
-    return 0;
+  if (!eglMakeCurrent(p->display, p->surface, p->surface, p->context)) {
+    destroyPresenter(p);
+    return -6;
   }
 
   // The texture MapLibre draws into. Physical pixels — the descriptor extent
   // stays logical and carries the scale factor separately (same split as the
   // Metal path on iOS, where mismatching the two is rejected outright).
-  glGenTextures(1, &r->texture);
-  glBindTexture(GL_TEXTURE_2D, r->texture);
-  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, r->physicalWidth, r->physicalHeight, 0,
-               GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+  glGenTextures(1, &p->texture);
+  glBindTexture(GL_TEXTURE_2D, p->texture);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, p->physicalWidth, p->physicalHeight,
+               0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
   glBindTexture(GL_TEXTURE_2D, 0);
 
-  r->program = buildBlitProgram();
-  if (!r->program) {
-    destroyRenderer(r);
-    return 0;
+  p->program = buildBlitProgram();
+  if (!p->program) {
+    destroyPresenter(p);
+    return -7;
   }
-  r->texUniform = glGetUniformLocation(r->program, "u_tex");
+  p->texUniform = glGetUniformLocation(p->program, "u_tex");
 
-  mln_runtime_options runtimeOptions = mln_runtime_options_default();
-  runtimeOptions.cache_path = ":memory:";
-  if (mln_runtime_create(&runtimeOptions, &r->runtime) != MLN_STATUS_OK) {
-    destroyRenderer(r);
-    return 0;
+  // Hand the context off to the Dart UI thread: an EGL context can be current
+  // on one thread at a time, and every later call happens over there.
+  eglMakeCurrent(p->display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+
+  {
+    std::lock_guard<std::mutex> lock(gPresentersMutex);
+    presenters()[presenterId] = p;
   }
+  return static_cast<jlong>(p->texture);
+}
 
-  mln_map_options mapOptions = mln_map_options_default();
-  mapOptions.width = static_cast<uint32_t>(width);
-  mapOptions.height = static_cast<uint32_t>(height);
-  mapOptions.scale_factor = scale;
-  mapOptions.map_mode = MLN_MAP_MODE_CONTINUOUS;
-  if (mln_map_create(r->runtime, &mapOptions, &r->map) != MLN_STATUS_OK) {
-    destroyRenderer(r);
-    return 0;
+// Platform thread, from the SurfaceProducer destroyed callback. The presenter
+// stays registered so fmm_present can report kErrSurfaceLost instead of
+// touching a dead surface.
+JNIEXPORT void JNICALL
+Java_com_veduapp_flutter_1map_1maplibre_MlnNative_nativePresenterInvalidate(
+    JNIEnv*, jclass, jlong presenterId) {
+  if (auto* p = findPresenter(presenterId)) p->surfaceLost = true;
+}
+
+JNIEXPORT void JNICALL
+Java_com_veduapp_flutter_1map_1maplibre_MlnNative_nativePresenterDestroy(
+    JNIEnv*, jclass, jlong presenterId) {
+  Presenter* p = nullptr;
+  {
+    std::lock_guard<std::mutex> lock(gPresentersMutex);
+    auto it = presenters().find(presenterId);
+    if (it != presenters().end()) {
+      p = it->second;
+      presenters().erase(it);
+    }
   }
+  destroyPresenter(p);
+}
 
-  const char* styleUrl = env->GetStringUTFChars(jstyleUrl, nullptr);
-  mln_map_set_style_url(r->map, styleUrl);
-  env->ReleaseStringUTFChars(jstyleUrl, styleUrl);
-  mln_map_request_repaint(r->map);
+// --- FFI, called from the Dart UI thread ---------------------------------
+
+// Attaches the presenter's back texture to the map as an OpenGL borrowed
+// texture render target. The descriptor's handles are all process-global
+// native objects, so it is built here rather than marshalled through Dart.
+// Runs on the caller's (Dart UI) thread — the same thread that created the
+// map — satisfying mln's owner-thread affinity. Leaves our context current.
+__attribute__((visibility("default"))) int32_t fmm_attach(
+    int64_t map, int64_t presenterId, int64_t* outSession) {
+  auto* p = findPresenter(presenterId);
+  if (!p) return static_cast<int32_t>(kErrUnknownPresenter);
+  if (!outSession || !map) return MLN_STATUS_INVALID_ARGUMENT;
+
+  if (!eglMakeCurrent(p->display, p->surface, p->surface, p->context)) {
+    return static_cast<int32_t>(kErrMakeCurrent);
+  }
 
   mln_opengl_borrowed_texture_descriptor descriptor =
       mln_opengl_borrowed_texture_descriptor_default();
-  descriptor.extent.width = static_cast<uint32_t>(width);
-  descriptor.extent.height = static_cast<uint32_t>(height);
-  descriptor.extent.scale_factor = scale;
+  descriptor.extent.width = static_cast<uint32_t>(p->logicalWidth);
+  descriptor.extent.height = static_cast<uint32_t>(p->logicalHeight);
+  descriptor.extent.scale_factor = p->scale;
   descriptor.context.platform = MLN_OPENGL_CONTEXT_PLATFORM_EGL;
-  descriptor.context.data.egl.display = r->display;
-  descriptor.context.data.egl.config = r->config;
-  descriptor.context.data.egl.share_context = r->context;
+  descriptor.context.data.egl.display = p->display;
+  descriptor.context.data.egl.config = p->config;
+  descriptor.context.data.egl.share_context = p->context;
   descriptor.context.data.egl.get_proc_address =
       reinterpret_cast<void*>(&eglGetProcAddress);
-  descriptor.texture = r->texture;
+  descriptor.texture = p->texture;
   descriptor.target = GL_TEXTURE_2D;
 
-  r->attachStatus =
-      mln_opengl_borrowed_texture_attach(r->map, &descriptor, &r->session);
-  if (r->attachStatus != MLN_STATUS_OK) {
-    destroyRenderer(r);
-    return 0;
-  }
-
-  return reinterpret_cast<jlong>(r);
+  mln_render_session* session = nullptr;
+  const mln_status status = mln_opengl_borrowed_texture_attach(
+      reinterpret_cast<mln_map*>(map), &descriptor, &session);
+  *outSession = reinterpret_cast<int64_t>(session);
+  return static_cast<int32_t>(status);
 }
 
-JNIEXPORT jboolean JNICALL
-Java_com_veduapp_flutter_1map_1maplibre_MlnNative_nativeRender(JNIEnv*, jclass,
-                                                               jlong handle) {
-  auto* r = asRenderer(handle);
-  if (!r || !r->runtime || !r->session) return JNI_FALSE;
+// Blit + swap. Called immediately after a successful render_update, which
+// leaves the SESSION's context current on this thread — so ours is re-bound
+// first. Returns blit+swap wall-clock ms, or a negative error code.
+// SurfaceProducer notifies the engine itself on queue; no
+// textureFrameAvailable equivalent is needed (unlike iOS).
+__attribute__((visibility("default"))) double fmm_present(
+    int64_t presenterId) {
+  auto* p = findPresenter(presenterId);
+  if (!p) return kErrUnknownPresenter;
+  if (p->surfaceLost) return kErrSurfaceLost;
 
-  mln_runtime_run_once(r->runtime);
-
-  mln_runtime_event event{};
-  event.size = static_cast<uint32_t>(sizeof(event));
-  bool hasEvent = false;
-  do {
-    hasEvent = false;
-    if (mln_runtime_poll_event(r->runtime, &event, &hasEvent) != MLN_STATUS_OK) {
-      break;
-    }
-    if (!hasEvent) break;
-    // Style and render failures are otherwise completely silent: the map just
-    // renders nothing, which is indistinguishable from a broken texture path.
-    if (event.type == MLN_RUNTIME_EVENT_MAP_STYLE_LOADED) {
-      r->styleLoaded = true;
-    } else if (event.type == MLN_RUNTIME_EVENT_MAP_LOADING_FAILED ||
-               event.type == MLN_RUNTIME_EVENT_MAP_RENDER_ERROR) {
-      r->lastEventMessage.assign(
-          event.message ? event.message : "(no message)",
-          event.message ? event.message_size : 12);
-    }
-  } while (hasEvent);
-
-  r->lastStatus = mln_render_session_render_update(r->session);
-  if (r->lastStatus != MLN_STATUS_OK) return JNI_FALSE;
+  const double started = nowMs();
 
   // The session runs on its own context; rebind ours before touching the
   // window surface. Textures are shared across the group, surfaces are not.
-  if (!eglMakeCurrent(r->display, r->surface, r->surface, r->context)) {
-    return JNI_FALSE;
+  if (!eglMakeCurrent(p->display, p->surface, p->surface, p->context)) {
+    return kErrMakeCurrent;
   }
 
-  // Crude cross-context sync for the spike: glFinish on the consumer side does
-  // not order the producer's commands, so a torn frame is possible. A proper
-  // fix is an EGLSync fence created after render_update.
+  // Crude cross-context sync: glFinish on the consumer side does not formally
+  // order the producer's commands, so a torn frame is possible. The proper
+  // fix is a glFenceSync created right after render_update.
   glFinish();
 
-  glViewport(0, 0, r->physicalWidth, r->physicalHeight);
+  glViewport(0, 0, p->physicalWidth, p->physicalHeight);
   glDisable(GL_BLEND);
   glDisable(GL_DEPTH_TEST);
-  glUseProgram(r->program);
+  glUseProgram(p->program);
   glActiveTexture(GL_TEXTURE0);
-  glBindTexture(GL_TEXTURE_2D, r->texture);
-  glUniform1i(r->texUniform, 0);
+  glBindTexture(GL_TEXTURE_2D, p->texture);
+  glUniform1i(p->texUniform, 0);
   glDrawArrays(GL_TRIANGLES, 0, 3);
 
-  r->glError = static_cast<int>(glGetError());
-  r->swapped = eglSwapBuffers(r->display, r->surface) ? 1 : 0;
-  r->frameCount++;
-  return JNI_TRUE;
+  if (glGetError() != GL_NO_ERROR) return kErrSwapFailed;
+  if (!eglSwapBuffers(p->display, p->surface)) return kErrSwapFailed;
+  return nowMs() - started;
 }
 
-JNIEXPORT void JNICALL
-Java_com_veduapp_flutter_1map_1maplibre_MlnNative_nativeSetCamera(
-    JNIEnv*, jclass, jlong handle, jdouble lat, jdouble lng, jdouble zoom,
-    jdouble bearing) {
-  auto* r = asRenderer(handle);
-  if (!r || !r->map) return;
-  mln_camera_options camera = mln_camera_options_default();
-  camera.fields = MLN_CAMERA_OPTION_CENTER | MLN_CAMERA_OPTION_ZOOM |
-                  MLN_CAMERA_OPTION_BEARING;
-  camera.latitude = lat;
-  camera.longitude = lng;
-  camera.zoom = zoom;
-  camera.bearing = bearing;
-  mln_map_jump_to(r->map, &camera);
-  mln_map_request_repaint(r->map);
+// Debug only: clear the back texture to a solid colour through a scratch FBO,
+// so a following fmm_present proves the whole presentation path without
+// MapLibre involved (the Android analogue of iOS Checkpoint B).
+__attribute__((visibility("default"))) int32_t fmm_debug_fill(
+    int64_t presenterId, double red, double green, double blue) {
+  auto* p = findPresenter(presenterId);
+  if (!p) return static_cast<int32_t>(kErrUnknownPresenter);
+
+  if (!eglMakeCurrent(p->display, p->surface, p->surface, p->context)) {
+    return static_cast<int32_t>(kErrMakeCurrent);
+  }
+  if (!p->fillFbo) glGenFramebuffers(1, &p->fillFbo);
+  glBindFramebuffer(GL_FRAMEBUFFER, p->fillFbo);
+  glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+                         p->texture, 0);
+  if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    return -1;
+  }
+  glClearColor(static_cast<float>(red), static_cast<float>(green),
+               static_cast<float>(blue), 1.0f);
+  glClear(GL_COLOR_BUFFER_BIT);
+  glBindFramebuffer(GL_FRAMEBUFFER, 0);
+  return 0;
 }
 
-JNIEXPORT void JNICALL
-Java_com_veduapp_flutter_1map_1maplibre_MlnNative_nativeSetStyle(
-    JNIEnv* env, jclass, jlong handle, jstring jstyleUrl) {
-  auto* r = asRenderer(handle);
-  if (!r || !r->map) return;
-  const char* styleUrl = env->GetStringUTFChars(jstyleUrl, nullptr);
-  mln_map_set_style_url(r->map, styleUrl);
-  env->ReleaseStringUTFChars(jstyleUrl, styleUrl);
-  mln_map_request_repaint(r->map);
-}
-
-JNIEXPORT jint JNICALL
-Java_com_veduapp_flutter_1map_1maplibre_MlnNative_nativeFrameCount(JNIEnv*,
-                                                                   jclass,
-                                                                   jlong handle) {
-  auto* r = asRenderer(handle);
-  return r ? r->frameCount : 0;
-}
-
-JNIEXPORT jint JNICALL
-Java_com_veduapp_flutter_1map_1maplibre_MlnNative_nativeSwapped(JNIEnv*, jclass,
-                                                                jlong handle) {
-  auto* r = asRenderer(handle);
-  return r ? r->swapped : -2;
-}
-
-JNIEXPORT jint JNICALL
-Java_com_veduapp_flutter_1map_1maplibre_MlnNative_nativeAttachStatus(
-    JNIEnv*, jclass, jlong handle) {
-  auto* r = asRenderer(handle);
-  return r ? r->attachStatus : -99;
-}
-
-JNIEXPORT jint JNICALL
-Java_com_veduapp_flutter_1map_1maplibre_MlnNative_nativeGlError(JNIEnv*, jclass,
-                                                                jlong handle) {
-  auto* r = asRenderer(handle);
-  return r ? r->glError : -1;
-}
-
-JNIEXPORT jboolean JNICALL
-Java_com_veduapp_flutter_1map_1maplibre_MlnNative_nativeStyleLoaded(
-    JNIEnv*, jclass, jlong handle) {
-  auto* r = asRenderer(handle);
-  return (r && r->styleLoaded) ? JNI_TRUE : JNI_FALSE;
-}
-
-JNIEXPORT jstring JNICALL
-Java_com_veduapp_flutter_1map_1maplibre_MlnNative_nativeLastEvent(
-    JNIEnv* env, jclass, jlong handle) {
-  auto* r = asRenderer(handle);
-  if (!r || r->lastEventMessage.empty()) return nullptr;
-  return env->NewStringUTF(r->lastEventMessage.c_str());
-}
-
-JNIEXPORT void JNICALL
-Java_com_veduapp_flutter_1map_1maplibre_MlnNative_nativeDestroy(JNIEnv*, jclass,
-                                                                jlong handle) {
-  destroyRenderer(asRenderer(handle));
-}
+// Keeps every mln_* function Dart looks up via dart:ffi alive in the .so.
+// Nothing native references most of these any more (the spike-era JNI loop
+// that did is gone), and without a reference the linker's --gc-sections
+// strips exactly the symbols Dart needs — which fails only at runtime, as a
+// lookup exception. MLN_API carries default visibility, so a reference is
+// all it takes to keep them exported.
+__attribute__((used, visibility("default"))) void* const fmm_keep_alive[] = {
+    reinterpret_cast<void*>(&mln_c_version),
+    reinterpret_cast<void*>(&mln_supported_render_backend_mask),
+    reinterpret_cast<void*>(&mln_runtime_options_default),
+    reinterpret_cast<void*>(&mln_runtime_create),
+    reinterpret_cast<void*>(&mln_runtime_destroy),
+    reinterpret_cast<void*>(&mln_runtime_run_once),
+    reinterpret_cast<void*>(&mln_runtime_poll_event),
+    reinterpret_cast<void*>(&mln_map_options_default),
+    reinterpret_cast<void*>(&mln_map_create),
+    reinterpret_cast<void*>(&mln_map_destroy),
+    reinterpret_cast<void*>(&mln_map_set_style_url),
+    reinterpret_cast<void*>(&mln_map_request_repaint),
+    reinterpret_cast<void*>(&mln_map_jump_to),
+    reinterpret_cast<void*>(&mln_camera_options_default),
+    reinterpret_cast<void*>(&mln_render_session_render_update),
+    reinterpret_cast<void*>(&mln_render_session_destroy),
+};
 
 }  // extern "C"

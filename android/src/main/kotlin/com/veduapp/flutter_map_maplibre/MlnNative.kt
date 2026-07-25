@@ -3,8 +3,9 @@ package com.veduapp.flutter_map_maplibre
 import android.view.Surface
 
 /**
- * JNI surface over maplibre-native-ffi. Everything — EGL context, MapLibre
- * runtime, map and render session — lives in C++; Kotlin only drives the loop.
+ * JNI surface over the native presenter half of the FFI architecture. Only
+ * presenter lifecycle crosses JNI; every mln_* call happens on the Dart UI
+ * thread via dart:ffi (fmm_attach / fmm_present in mln_jni.cpp).
  */
 internal object MlnNative {
 
@@ -18,39 +19,23 @@ internal object MlnNative {
      */
     external fun nativeAndroidInit(context: Any): Int
 
-    /** Returns an opaque handle, or 0 on failure. */
-    external fun nativeCreate(
+    /**
+     * Builds the EGL objects, GL back texture and blit program for one
+     * presenter and registers it under [presenterId] (the Flutter texture id).
+     * Returns the GL back-texture name (> 0), or a negative step code on
+     * failure. Leaves the EGL context unbound — it becomes current on the
+     * Dart UI thread.
+     */
+    external fun nativePresenterCreate(
+        presenterId: Long,
         surface: Surface,
         width: Int,
         height: Int,
-        scale: Double,
-        styleUrl: String
+        scale: Double
     ): Long
 
-    external fun nativeRender(handle: Long): Boolean
+    /** Marks the presenter's window surface dead; fmm_present starts failing soft. */
+    external fun nativePresenterInvalidate(presenterId: Long)
 
-    external fun nativeSetCamera(
-        handle: Long,
-        lat: Double,
-        lng: Double,
-        zoom: Double,
-        bearing: Double
-    )
-
-    external fun nativeSetStyle(handle: Long, styleUrl: String)
-
-    external fun nativeFrameCount(handle: Long): Int
-
-    external fun nativeSwapped(handle: Long): Int
-
-    external fun nativeAttachStatus(handle: Long): Int
-
-    external fun nativeGlError(handle: Long): Int
-
-    external fun nativeStyleLoaded(handle: Long): Boolean
-
-    /** Message from the last loading/render failure, or null if none. */
-    external fun nativeLastEvent(handle: Long): String?
-
-    external fun nativeDestroy(handle: Long)
+    external fun nativePresenterDestroy(presenterId: Long)
 }

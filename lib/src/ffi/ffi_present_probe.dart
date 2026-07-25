@@ -4,6 +4,7 @@ import 'package:flutter/scheduler.dart';
 import 'package:flutter/widgets.dart';
 
 import '../maplibre_channel.dart';
+import 'mln_library.dart';
 
 typedef _PresentNative = Double Function(Int64);
 typedef _FillNative = Int32 Function(Int64, Double, Double, Double);
@@ -28,9 +29,9 @@ class _FfiPresentProbeState extends State<FfiPresentProbe>
   int _frame = 0;
   double _lastBlitMs = -1;
 
-  late final _present = DynamicLibrary.process()
+  late final _present = mlnLibrary
       .lookupFunction<_PresentNative, double Function(int)>('fmm_present');
-  late final _fill = DynamicLibrary.process()
+  late final _fill = mlnLibrary
       .lookupFunction<_FillNative, int Function(int, double, double, double)>(
         'fmm_debug_fill',
       );
