@@ -4,7 +4,7 @@
 
 **Goal:** Stop the basemap texture from being destroyed and recreated when the bottom sheet resizes the map widget — the visible viewport is always the phone screen, so the session is created once at screen size and each frame renders a camera cropped to the visible strip.
 
-**Architecture:** A pure function `cropCamera` derives the visible-strip camera from the full flutter_map camera (same zoom/bearing, center moved to the visible rect's center via `screenOffsetToLatLng`). `MapLibreBasemap` gains `fixedViewport`/`viewportAlignment` params: when set, session size is pinned, the success-path transform becomes a pure translation onto the visible rect, and layout changes never recreate. Vedu passes `MediaQuery.sizeOf(context)`.
+**Architecture:** A pure function `cropCamera` derives the visible-strip camera from the full flutter_map camera (same zoom/bearing, center moved to the visible rect's center via `screenOffsetToLatLng`). `MapLibreBasemap` gains `fixedViewport`/`viewportAlignment` params: when set, session size is pinned, the success-path transform becomes a pure translation onto the visible rect, and layout changes never recreate. The host app passes `MediaQuery.sizeOf(context)`.
 
 **Tech Stack:** Dart only — flutter_map ^8.3.1 `MapCamera` math, existing `BasemapRenderer` seam. **No native, FFI, or renderer changes.**
 
@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- Work in the worktree: `/Users/sushakov/Projects/vedu-app/vedu_app_client/.claude/worktrees/maplibre-perf` (branch `maplibre-perf`). All paths below are relative to it; run git from its root.
+- Work in the worktree: `<host app worktree>` (branch `maplibre-perf`). All paths below are relative to it; run git from its root.
 - All Flutter/Dart commands prefixed with `fvm`. Package commands run from `packages/flutter_map_maplibre/`.
 - After editing any `.dart` file, run `fvm dart format <files>` on every touched file (one invocation).
 - Commit **only** the exact files each task names. NEVER commit `ios/Runner.xcodeproj/project.pbxproj`, `ios/Runner.app.dSYM.zip`, `.env`, or anything under a `Frameworks/` / xcframework path (the worktree carries local-only signing edits).
@@ -164,7 +164,7 @@ import 'package:flutter_map/flutter_map.dart';
 ///         full.latLngToScreenOffset(p) - visibleRect.topLeft
 ///
 /// which is what lets a fixed-size texture cover just the visible part of a
-/// deliberately oversized map layer (Vedu lays the map out taller than the
+/// deliberately oversized map layer (the host app lays the map out taller than the
 /// screen to push the camera center above the bottom sheet; the overflow is
 /// clipped offscreen and need never be rendered).
 ///
@@ -249,7 +249,7 @@ Add to `main()` in the same file (after the existing helpers; it reuses `basemap
 
 ```dart
   /// Fixed-viewport harness: the map widget in a parent-controlled box, the
-  /// shape of Vedu's sheet center-offset layout (layer taller than screen).
+  /// shape of the host app's sheet center-offset layout (layer taller than screen).
   Future<void> pumpSizedMap(
     WidgetTester tester, {
     required double height,
@@ -404,7 +404,7 @@ Add the fields (after `overRenderFactor`):
 ```dart
   /// When set, the texture viewport is pinned to this size and layout size
   /// changes never recreate the session. Use when the layer's widget is
-  /// deliberately laid out larger than what is visible (Vedu lays the map
+  /// deliberately laid out larger than what is visible (the host app lays the map
   /// out taller than the screen to push the camera center above the bottom
   /// sheet): pass the truly visible size and the offscreen remainder is
   /// never rendered. Null means the layout size is the viewport, recreating
@@ -530,7 +530,7 @@ git commit -m "feat(flutter_map_maplibre): fixed-viewport mode — sheet resizes
 
 ---
 
-### Task 3: Vedu wiring
+### Task 3: host app wiring
 
 **Files:**
 - Modify: `lib/screens/main_map/main_map_map_view/maplibre_basemap_layer.dart`

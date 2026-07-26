@@ -73,7 +73,7 @@ compatibility with `eglCreateWindowSurface` was the open question. It works.
 
 Also incidental but useful: the example app ran under **Impeller (OpenGLES)**,
 per `android_context_gl_impeller.cc` in logcat. So the path works on Impeller.
-The Vedu app runs Skia on Android; the Skia path is untested here, though the
+The host app runs Skia on Android; the Skia path is untested here, though the
 research established that producer selection keys on API level rather than on
 the renderer.
 

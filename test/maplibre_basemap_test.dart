@@ -175,7 +175,7 @@ void main() {
   }
 
   /// Fixed-viewport harness: the map widget in a parent-controlled box, the
-  /// shape of Vedu's sheet center-offset layout (layer taller than screen).
+  /// shape of a sheet center-offset layout (layer taller than screen).
   Future<void> pumpSizedMap(
     WidgetTester tester, {
     required double height,

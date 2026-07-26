@@ -110,7 +110,7 @@ rendered = admit ? _renderer.render(target) : false
 - `decideTick`, `decideSleep`, the insurance pump, and failure retry paths
   are untouched. Fewer camera jumps only make parking easier.
 
-### 4. Activation and margin (Vedu wiring)
+### 4. Activation and margin (host app wiring)
 
 B is **always on** for the vector basemap — regular mode and power saving
 alike. Consequences:
@@ -129,7 +129,7 @@ alike. Consequences:
 
 New `MapLibreBasemap` constructor parameters, both with defaults:
 `admissionGuardPx = 16.0`, `admissionZoomQuantum = 0.05`. The bearing
-quantum stays a package constant (Vedu's map does not rotate; no app-side
+quantum stays a package constant (the host app's map does not rotate; no app-side
 tuning need).
 
 ### 5. Diagnostics

@@ -1,7 +1,10 @@
 name: flutter_map_maplibre
-description: "A new Flutter plugin project."
+description: >-
+  A natively-rendered MapLibre vector basemap for flutter_map, composited as a
+  Flutter texture underneath your existing layers. flutter_map keeps the camera.
 version: 0.0.1
-homepage:
+homepage: https://github.com/serushakov/flutter_map_maplibre
+repository: https://github.com/serushakov/flutter_map_maplibre
 
 environment:
   sdk: ^3.12.2
@@ -13,7 +16,7 @@ dependencies:
   ffi: ^2.1.0
   flutter_map: ^8.3.1
   # Match flutter_map's own range rather than pinning, so this package adopts
-  # whatever latlong2 the host app already resolved (Vedu is on 0.9.x).
+  # whatever latlong2 the host app already resolved.
   latlong2: '>=0.9.1 <0.11.0'
   vector_math: ^2.2.0
 
@@ -41,7 +44,7 @@ flutter:
   plugin:
     platforms:
       android:
-        package: com.veduapp.flutter_map_maplibre
+        package: io.ushakov.flutter_map_maplibre
         pluginClass: FlutterMapMaplibrePlugin
       ios:
         pluginClass: FlutterMapMaplibrePlugin

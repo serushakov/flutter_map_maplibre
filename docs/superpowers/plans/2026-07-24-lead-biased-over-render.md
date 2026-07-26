@@ -4,7 +4,7 @@
 
 **Goal:** When the power-saving frame cap makes displayed frames stale against a faster screen, position the fixed over-render margin ahead of camera motion so capped frames never bare the leading edge — proven by a new `underRenderPx` diagnostic.
 
-**Architecture:** A pure `LeadBias` state machine (EMA velocity from successive build cameras → clamped, hysteresis-guarded bias) shifts the camera handed to `render()`; placement rides the existing exact `residualTransform`. A pure `underRenderPx` function measures uncovered viewport px and flows through the existing diagnostics poll into the soak JSONL. Vedu activates the margin only when `capFps < display refresh rate`.
+**Architecture:** A pure `LeadBias` state machine (EMA velocity from successive build cameras → clamped, hysteresis-guarded bias) shifts the camera handed to `render()`; placement rides the existing exact `residualTransform`. A pure `underRenderPx` function measures uncovered viewport px and flows through the existing diagnostics poll into the soak JSONL. The host app activates the margin only when `capFps < display refresh rate`.
 
 **Spec:** `docs/superpowers/specs/2026-07-24-lead-biased-over-render-design.md` — read it if any requirement below seems ambiguous.
 
@@ -16,7 +16,7 @@
 - All Flutter/Dart commands prefixed with `fvm`.
 - After editing any `.dart` file, run `fvm dart format <every-touched-file>` (skip generated files).
 - Stage by explicit path only — never `git add -A`. NEVER commit: `ios/Runner.xcodeproj/project.pbxproj`, `ios/Podfile.lock`, `packages/flutter_map_maplibre/example/ios/Podfile.lock`, `ios/Runner.app.dSYM.zip`, `.env`.
-- Exact values (from the spec, verbatim): diagnostic key `underRenderPx`; Vedu margin factor `1.15`; `leadTime = 2 × frameCap`; hysteresis quantum `8.0` logical px; safety factor `0.85`; EMA time constant `100ms`; existing cap constant `powerSavingFrameCap` (15ms, in `lib/providers/power_saving_mode.dart`) — do not rename or re-derive any of these.
+- Exact values (from the spec, verbatim): diagnostic key `underRenderPx`; host-app margin factor `1.15`; `leadTime = 2 × frameCap`; hysteresis quantum `8.0` logical px; safety factor `0.85`; EMA time constant `100ms`; existing cap constant `powerSavingFrameCap` (15ms, in `lib/providers/power_saving_mode.dart`) — do not rename or re-derive any of these.
 - Package tests run from the package dir: `cd packages/flutter_map_maplibre && fvm flutter test`. App tests from the worktree root.
 - Bias must be inert (byte-identical behavior to today) when `frameCap == null` or `overRenderFactor == 1.0`.
 
@@ -132,7 +132,7 @@ void main() {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /Users/sushakov/Projects/vedu-app/vedu_app_client/.claude/worktrees/maplibre-perf/packages/flutter_map_maplibre && fvm flutter test test/lead_bias_test.dart`
+Run: `cd <package root> && fvm flutter test test/lead_bias_test.dart`
 Expected: FAIL — `lead_bias.dart` does not exist.
 
 - [ ] **Step 3: Write the implementation**
@@ -224,13 +224,13 @@ class LeadBias {
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd /Users/sushakov/Projects/vedu-app/vedu_app_client/.claude/worktrees/maplibre-perf/packages/flutter_map_maplibre && fvm flutter test test/lead_bias_test.dart`
+Run: `cd <package root> && fvm flutter test test/lead_bias_test.dart`
 Expected: PASS (7 tests).
 
 - [ ] **Step 5: Format and commit**
 
 ```bash
-cd /Users/sushakov/Projects/vedu-app/vedu_app_client/.claude/worktrees/maplibre-perf
+cd <host app worktree>
 fvm dart format packages/flutter_map_maplibre/lib/src/lead_bias.dart packages/flutter_map_maplibre/test/lead_bias_test.dart
 git add packages/flutter_map_maplibre/lib/src/lead_bias.dart packages/flutter_map_maplibre/test/lead_bias_test.dart
 git commit -m "feat(flutter_map_maplibre): lead-bias velocity estimator and policy"
@@ -368,7 +368,7 @@ void main() {
     );
   });
 
-  test('cropped viewport of a taller layer, the Vedu sheet shape', () {
+  test('cropped viewport of a taller layer, the bottom-sheet shape', () {
     // Layer 400x1000, visible bottom 400x800 strip; rendered camera is the
     // crop itself → covered exactly.
     final layer = cameraAt(size: const Size(400, 1000));
@@ -391,7 +391,7 @@ void main() {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /Users/sushakov/Projects/vedu-app/vedu_app_client/.claude/worktrees/maplibre-perf/packages/flutter_map_maplibre && fvm flutter test test/under_render_test.dart`
+Run: `cd <package root> && fvm flutter test test/under_render_test.dart`
 Expected: FAIL — `under_render.dart` does not exist.
 
 - [ ] **Step 3: Write the implementation**
@@ -446,13 +446,13 @@ double underRenderPx({
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd /Users/sushakov/Projects/vedu-app/vedu_app_client/.claude/worktrees/maplibre-perf/packages/flutter_map_maplibre && fvm flutter test test/under_render_test.dart`
+Run: `cd <package root> && fvm flutter test test/under_render_test.dart`
 Expected: PASS (7 tests).
 
 - [ ] **Step 5: Format and commit**
 
 ```bash
-cd /Users/sushakov/Projects/vedu-app/vedu_app_client/.claude/worktrees/maplibre-perf
+cd <host app worktree>
 fvm dart format packages/flutter_map_maplibre/lib/src/under_render.dart packages/flutter_map_maplibre/test/under_render_test.dart
 git add packages/flutter_map_maplibre/lib/src/under_render.dart packages/flutter_map_maplibre/test/under_render_test.dart
 git commit -m "feat(flutter_map_maplibre): underRenderPx uncovered-viewport metric"
@@ -614,7 +614,7 @@ Add these tests at the end of `main()`:
 
 - [ ] **Step 2: Run tests to verify the new ones fail**
 
-Run: `cd /Users/sushakov/Projects/vedu-app/vedu_app_client/.claude/worktrees/maplibre-perf/packages/flutter_map_maplibre && fvm flutter test test/maplibre_basemap_test.dart`
+Run: `cd <package root> && fvm flutter test test/maplibre_basemap_test.dart`
 Expected: the 3 bias tests FAIL (rendered camera is never shifted); `no cap means no bias` may already pass; all pre-existing tests still PASS.
 
 - [ ] **Step 3: Implement in `maplibre_basemap.dart`**
@@ -708,13 +708,13 @@ Replace the transform selection (keep the `placed` construction and its comment 
 
 - [ ] **Step 4: Run the full package suite**
 
-Run: `cd /Users/sushakov/Projects/vedu-app/vedu_app_client/.claude/worktrees/maplibre-perf/packages/flutter_map_maplibre && fvm flutter test`
+Run: `cd <package root> && fvm flutter test`
 Expected: ALL PASS — new bias tests and every pre-existing test (inertness: the no-cap and factor-1.0 paths return the identical cropped instance, so the identity fast path is untouched).
 
 - [ ] **Step 5: Format and commit**
 
 ```bash
-cd /Users/sushakov/Projects/vedu-app/vedu_app_client/.claude/worktrees/maplibre-perf
+cd <host app worktree>
 fvm dart format packages/flutter_map_maplibre/lib/src/maplibre_basemap.dart packages/flutter_map_maplibre/test/maplibre_basemap_test.dart
 git add packages/flutter_map_maplibre/lib/src/maplibre_basemap.dart packages/flutter_map_maplibre/test/maplibre_basemap_test.dart
 git commit -m "feat(flutter_map_maplibre): lead-bias the rendered camera under a frame cap"
@@ -857,7 +857,7 @@ Extend `pumpSizedMap` with `ValueChanged<Map<String, Object?>>? onDiagnostics` t
 
 - [ ] **Step 2: Run tests to verify the new ones fail**
 
-Run: `cd /Users/sushakov/Projects/vedu-app/vedu_app_client/.claude/worktrees/maplibre-perf/packages/flutter_map_maplibre && fvm flutter test test/maplibre_basemap_test.dart`
+Run: `cd <package root> && fvm flutter test test/maplibre_basemap_test.dart`
 Expected: the 4 new tests FAIL (`underRenderPx` key absent; factor change does not recreate).
 
 - [ ] **Step 3: Implement in `maplibre_basemap.dart`**
@@ -913,13 +913,13 @@ Also add a race test using `installChannelMock`'s `gate` parameter: hold `create
 
 - [ ] **Step 4: Run the full package suite**
 
-Run: `cd /Users/sushakov/Projects/vedu-app/vedu_app_client/.claude/worktrees/maplibre-perf/packages/flutter_map_maplibre && fvm flutter test`
+Run: `cd <package root> && fvm flutter test`
 Expected: ALL PASS.
 
 - [ ] **Step 5: Format and commit**
 
 ```bash
-cd /Users/sushakov/Projects/vedu-app/vedu_app_client/.claude/worktrees/maplibre-perf
+cd <host app worktree>
 fvm dart format packages/flutter_map_maplibre/lib/src/maplibre_basemap.dart packages/flutter_map_maplibre/test/maplibre_basemap_test.dart
 git add packages/flutter_map_maplibre/lib/src/maplibre_basemap.dart packages/flutter_map_maplibre/test/maplibre_basemap_test.dart
 git commit -m "feat(flutter_map_maplibre): underRenderPx diagnostic and factor-change recreate"
@@ -927,14 +927,14 @@ git commit -m "feat(flutter_map_maplibre): underRenderPx diagnostic and factor-c
 
 ---
 
-### Task 5: Vedu activation rule + diagnostics surfacing
+### Task 5: host app activation rule + diagnostics surfacing
 
 **Files:**
 - Modify: `lib/screens/main_map/main_map_map_view/maplibre_basemap_layer.dart`
 - Test: `test/screens/main_map/maplibre_basemap_layer_test.dart` (create)
 
 **Interfaces:**
-- Consumes: existing `powerSavingFrameCap` (15ms) and `PowerSavingProvider.savingActiveOf` from `package:vedu_app_client/providers/...`; `View.of(context).display.refreshRate`.
+- Consumes: existing `powerSavingFrameCap` (15ms) and `PowerSavingProvider.savingActiveOf` from `package:host_app/providers/...`; `View.of(context).display.refreshRate`.
 - Produces: top-level `@visibleForTesting bool leadMarginActive({required bool saving, required Duration frameCap, required double refreshRate})` in the layer file; `overRenderFactor` wired to `1.15` only when active.
 
 - [ ] **Step 1: Write the failing test**
@@ -942,7 +942,7 @@ git commit -m "feat(flutter_map_maplibre): underRenderPx diagnostic and factor-c
 ```dart
 // test/screens/main_map/maplibre_basemap_layer_test.dart
 import 'package:flutter_test/flutter_test.dart';
-import 'package:vedu_app_client/screens/main_map/main_map_map_view/maplibre_basemap_layer.dart';
+import 'package:host_app/screens/main_map/main_map_map_view/maplibre_basemap_layer.dart';
 
 void main() {
   test('lead margin only when capped below the display rate', () {
@@ -967,7 +967,7 @@ void main() {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /Users/sushakov/Projects/vedu-app/vedu_app_client/.claude/worktrees/maplibre-perf && fvm flutter test test/screens/main_map/maplibre_basemap_layer_test.dart`
+Run: `cd <host app worktree> && fvm flutter test test/screens/main_map/maplibre_basemap_layer_test.dart`
 Expected: FAIL — `leadMarginActive` is not defined.
 
 - [ ] **Step 3: Implement in `maplibre_basemap_layer.dart`**
@@ -1035,13 +1035,13 @@ In `_numbersPanel`'s row list, add after `${row('skippedTicks')}`:
 
 - [ ] **Step 4: Run the tests and analyzer**
 
-Run: `cd /Users/sushakov/Projects/vedu-app/vedu_app_client/.claude/worktrees/maplibre-perf && fvm flutter test test/screens/main_map/maplibre_basemap_layer_test.dart && fvm flutter analyze`
+Run: `cd <host app worktree> && fvm flutter test test/screens/main_map/maplibre_basemap_layer_test.dart && fvm flutter analyze`
 Expected: test PASS; analyze reports no new issues.
 
 - [ ] **Step 5: Format and commit**
 
 ```bash
-cd /Users/sushakov/Projects/vedu-app/vedu_app_client/.claude/worktrees/maplibre-perf
+cd <host app worktree>
 fvm dart format lib/screens/main_map/main_map_map_view/maplibre_basemap_layer.dart test/screens/main_map/maplibre_basemap_layer_test.dart
 git add lib/screens/main_map/main_map_map_view/maplibre_basemap_layer.dart test/screens/main_map/maplibre_basemap_layer_test.dart
 git commit -m "feat(map): activate the lead-biased margin when capped below the display rate"
@@ -1056,7 +1056,7 @@ Not a code task — run after Tasks 1–5 land.
 - [ ] Build and install a profile build from the worktree:
 
 ```bash
-cd /Users/sushakov/Projects/vedu-app/vedu_app_client/.claude/worktrees/maplibre-perf
+cd <host app worktree>
 fvm flutter build ios --profile
 xcrun devicectl device install app --device 80D04F4B-B11B-50CA-B65A-08E6B38B4A6E build/ios/iphoneos/Runner.app
 ```

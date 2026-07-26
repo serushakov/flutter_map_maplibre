@@ -10,9 +10,9 @@ Pod::Spec.new do |s|
 Spike: a natively-rendered MapLibre basemap streamed into a Flutter Texture,
 with the camera owned by Dart.
                        DESC
-  s.homepage         = 'http://example.com'
-  s.license          = { :file => '../LICENSE' }
-  s.author           = { 'Your Company' => 'email@example.com' }
+  s.homepage         = 'https://github.com/serushakov/flutter_map_maplibre'
+  s.license          = { :type => 'MIT', :file => '../LICENSE' }
+  s.author           = { 'Sergey Ushakov' => 'sergey@ushakov.io' }
   s.source           = { :path => '.' }
   s.source_files = 'flutter_map_maplibre/Sources/flutter_map_maplibre/**/*'
   s.dependency 'Flutter'

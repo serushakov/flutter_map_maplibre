@@ -1,4 +1,4 @@
-package com.veduapp.flutter_map_maplibre
+package io.ushakov.flutter_map_maplibre
 
 import android.view.Surface
 

@@ -4,7 +4,7 @@
 
 **Goal:** Only admit a camera-driven native MapLibre render when the viewport nears the rendered frame's runway, crosses a zoom/bearing quantum, or settles off-target — collapsing GPS-follow renders from ~60–118/s to ~0.1/s.
 
-**Architecture:** A pure admission gate (`render_admission.dart`) reuses the 4-corner coverage math from `under_render.dart` (refactored to expose a signed overshoot). The `MapLibreBasemap` build path consults the gate before `_renderer.render()`; denied builds fall through to the existing exact `residualTransform` placement. A one-shot settle timer lands a final exact render when a gesture ends mid-zoom-quantum. Vedu's layer goes always-on margin (1.20) and retires the `leadMarginActive` predicate.
+**Architecture:** A pure admission gate (`render_admission.dart`) reuses the 4-corner coverage math from `under_render.dart` (refactored to expose a signed overshoot). The `MapLibreBasemap` build path consults the gate before `_renderer.render()`; denied builds fall through to the existing exact `residualTransform` placement. A one-shot settle timer lands a final exact render when a gesture ends mid-zoom-quantum. The host app's layer goes always-on margin (1.20) and retires the `leadMarginActive` predicate.
 
 **Tech Stack:** Flutter/Dart, flutter_map 8.3.1, package `packages/flutter_map_maplibre` (FFI renderer faked in tests).
 
@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- All Flutter/Dart commands prefixed with `fvm`; run from the worktree root `/Users/sushakov/Projects/vedu-app/vedu_app_client/.claude/worktrees/maplibre-perf` (cd explicitly — the shell cwd resets between commands).
+- All Flutter/Dart commands prefixed with `fvm`; run from the worktree root `<host app worktree>` (cd explicitly — the shell cwd resets between commands).
 - After editing/creating any `.dart` file, run `fvm dart format <every touched file>` (skip generated files).
 - NEVER commit: `ios/Runner.xcodeproj/project.pbxproj`, `ios/Podfile.lock`, `packages/flutter_map_maplibre/example/ios/Podfile.lock`, `ios/Runner.app.dSYM.zip`, `.env`. Stage by explicit path only — never `git add -A` or `git add .`.
 - Commit messages end with: `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>`
@@ -74,7 +74,7 @@ test('renderOvershootPx: same camera, symmetric margin → slack = margin', () {
 
 - [ ] **Step 2: Run to verify failure**
 
-Run: `cd /Users/sushakov/Projects/vedu-app/vedu_app_client/.claude/worktrees/maplibre-perf/packages/flutter_map_maplibre && fvm flutter test test/under_render_test.dart`
+Run: `cd <package root> && fvm flutter test test/under_render_test.dart`
 Expected: FAIL — `renderOvershootPx` undefined.
 
 - [ ] **Step 3: Refactor** — replace the body of `under_render.dart` so the existing loop becomes the signed function and `underRenderPx` clamps it:
@@ -143,7 +143,7 @@ Expected: all 10 tests PASS (7 existing + 3 new).
 - [ ] **Step 5: Format and commit**
 
 ```bash
-cd /Users/sushakov/Projects/vedu-app/vedu_app_client/.claude/worktrees/maplibre-perf
+cd <host app worktree>
 fvm dart format packages/flutter_map_maplibre/lib/src/under_render.dart packages/flutter_map_maplibre/test/under_render_test.dart
 git add packages/flutter_map_maplibre/lib/src/under_render.dart packages/flutter_map_maplibre/test/under_render_test.dart
 git commit -m "refactor(flutter_map_maplibre): expose signed render overshoot
@@ -263,7 +263,7 @@ void main() {
 
 - [ ] **Step 2: Run to verify failure**
 
-Run: `cd /Users/sushakov/Projects/vedu-app/vedu_app_client/.claude/worktrees/maplibre-perf/packages/flutter_map_maplibre && fvm flutter test test/render_admission_test.dart`
+Run: `cd <package root> && fvm flutter test test/render_admission_test.dart`
 Expected: FAIL — `render_admission.dart` does not exist.
 
 - [ ] **Step 3: Implement** — create `lib/src/render_admission.dart`:
@@ -336,7 +336,7 @@ Expected: 9 tests PASS.
 - [ ] **Step 5: Format and commit**
 
 ```bash
-cd /Users/sushakov/Projects/vedu-app/vedu_app_client/.claude/worktrees/maplibre-perf
+cd <host app worktree>
 fvm dart format packages/flutter_map_maplibre/lib/src/render_admission.dart packages/flutter_map_maplibre/test/render_admission_test.dart packages/flutter_map_maplibre/lib/flutter_map_maplibre.dart
 git add packages/flutter_map_maplibre/lib/src/render_admission.dart packages/flutter_map_maplibre/test/render_admission_test.dart packages/flutter_map_maplibre/lib/flutter_map_maplibre.dart
 git commit -m "feat(flutter_map_maplibre): pure drift-threshold admission gate
@@ -607,7 +607,7 @@ Then: `fvm flutter test` until green (expect ~80 tests passing).
 - [ ] **Step 6: Format and commit**
 
 ```bash
-cd /Users/sushakov/Projects/vedu-app/vedu_app_client/.claude/worktrees/maplibre-perf
+cd <host app worktree>
 fvm dart format packages/flutter_map_maplibre/lib/src/maplibre_basemap.dart packages/flutter_map_maplibre/test/maplibre_basemap_test.dart
 git add packages/flutter_map_maplibre/lib/src/maplibre_basemap.dart packages/flutter_map_maplibre/test/maplibre_basemap_test.dart
 git commit -m "feat(flutter_map_maplibre): gate camera renders on runway drift
@@ -761,7 +761,7 @@ Expected: all tests PASS (including the three settle tests).
 - [ ] **Step 5: Format and commit**
 
 ```bash
-cd /Users/sushakov/Projects/vedu-app/vedu_app_client/.claude/worktrees/maplibre-perf
+cd <host app worktree>
 fvm dart format packages/flutter_map_maplibre/lib/src/maplibre_basemap.dart packages/flutter_map_maplibre/test/maplibre_basemap_test.dart
 git add packages/flutter_map_maplibre/lib/src/maplibre_basemap.dart packages/flutter_map_maplibre/test/maplibre_basemap_test.dart
 git commit -m "feat(flutter_map_maplibre): settle render after off-quantum rest
@@ -771,7 +771,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 
 ---
 
-### Task 5: Vedu wiring — always-on margin, retire leadMarginActive
+### Task 5: host app wiring — always-on margin, retire leadMarginActive
 
 **Files:**
 - Modify: `lib/screens/main_map/main_map_map_view/maplibre_basemap_layer.dart`
@@ -870,7 +870,7 @@ Expected: no analyzer errors (in this file; pre-existing infos elsewhere are fin
 - [ ] **Step 5: Format and commit**
 
 ```bash
-cd /Users/sushakov/Projects/vedu-app/vedu_app_client/.claude/worktrees/maplibre-perf
+cd <host app worktree>
 fvm dart format lib/screens/main_map/main_map_map_view/maplibre_basemap_layer.dart test/screens/main_map/maplibre_basemap_layer_test.dart
 git add lib/screens/main_map/main_map_map_view/maplibre_basemap_layer.dart test/screens/main_map/maplibre_basemap_layer_test.dart
 git commit -m "feat(map): always-on over-render margin under drift admission
@@ -889,7 +889,7 @@ Not subagent work — the controller runs the build and the user handles the pho
 - [ ] **Step 1: Profile build and install** (iPhone 14 Pro, devicectl UUID `80D04F4B-B11B-50CA-B65A-08E6B38B4A6E`, bundle `io.ushakov.busFollow`):
 
 ```bash
-cd /Users/sushakov/Projects/vedu-app/vedu_app_client/.claude/worktrees/maplibre-perf
+cd <host app worktree>
 fvm flutter build ios --profile
 xcrun devicectl device install app --device 80D04F4B-B11B-50CA-B65A-08E6B38B4A6E build/ios/iphoneos/Runner.app
 ```

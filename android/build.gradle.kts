@@ -1,4 +1,4 @@
-group = "com.veduapp.flutter_map_maplibre"
+group = "io.ushakov.flutter_map_maplibre"
 version = "1.0-SNAPSHOT"
 
 buildscript {
@@ -26,7 +26,7 @@ plugins {
 }
 
 android {
-    namespace = "com.veduapp.flutter_map_maplibre"
+    namespace = "io.ushakov.flutter_map_maplibre"
 
     compileSdk = 36
 

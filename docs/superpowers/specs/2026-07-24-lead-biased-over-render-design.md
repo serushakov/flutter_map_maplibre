@@ -111,7 +111,7 @@ existing `mln` keys.
 This is the acceptance instrument for criterion 1, and later the regression
 metric for B.
 
-### 6. Activation rule and Vedu wiring
+### 6. Activation rule and host app wiring
 
 The feature (margin + bias) is active **only when the frame cap is below the
 display's maximum refresh rate**:
@@ -131,7 +131,7 @@ final factor  = powerSavingActive && capFps < refresh ? 1.15 : 1.0;
   margin at all.
 - Cap 60 on a 120 Hz panel → active at 1.15.
 
-The factor lives in Vedu's wiring (`MaplibreBasemapLayer`), not the package:
+The factor lives in the host app's wiring (`MaplibreBasemapLayer`), not the package:
 `overRenderFactor` stays a plain constructor parameter, tunable per app.
 Package-side, bias is inert whenever the margin is zero
 (`overRenderFactor == 1.0` → `maxBias == 0`), with no separate flag.
@@ -155,7 +155,7 @@ auto mode).
   behavior. Bias is a pure translation and neither helps nor hurts here.
 - **Reversal mid-fling**: the 15 % trailing reserve plus hysteresis absorb
   gentle reversals fine. A hard fling reversal is a harder case: it starts
-  from a fully wrong-way EMA, and at Vedu's numbers the trailing reserve is
+  from a fully wrong-way EMA, and at the host app's numbers the trailing reserve is
   only ~4 px horizontally (15 % of the ~28 px half-margin), while swinging
   the bias to the new direction takes ~70-100 ms (the EMA time constant).
   Bared strips of ~10 px can plausibly appear on a handful of capped frames

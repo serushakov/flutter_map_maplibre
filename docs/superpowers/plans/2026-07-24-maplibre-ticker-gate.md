@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- All work in the worktree `/Users/sushakov/Projects/vedu-app/vedu_app_client/.claude/worktrees/maplibre-perf`, branch `ticker-gate`. Every shell command must `cd` there explicitly first (the shell cwd resets between commands).
+- All work in the worktree `<host app worktree>`, branch `ticker-gate`. Every shell command must `cd` there explicitly first (the shell cwd resets between commands).
 - Changes ONLY under `packages/flutter_map_maplibre/` (spec: "Scope: packages/flutter_map_maplibre only"). No changes to native code, vendored headers, or generated bindings (`lib/src/ffi/maplibre_bindings.dart`); `lib/src/ffi/ffi_basemap_renderer.dart` is hand-written Dart and IS in scope.
 - NEVER commit: `ios/Runner.xcodeproj/project.pbxproj`, `ios/Podfile.lock`, `packages/flutter_map_maplibre/example/ios/Podfile.lock`, `ios/Runner.app.dSYM.zip`, `.env`. These are dirty in the worktree by design — stage files explicitly by path, never `git add -A`.
 - All Flutter/Dart commands prefixed with `fvm`. After editing any `.dart` file, run `fvm dart format <every touched file>` before committing.
@@ -88,7 +88,7 @@ Append to `packages/flutter_map_maplibre/test/tick_gate_test.dart`, inside `main
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `cd /Users/sushakov/Projects/vedu-app/vedu_app_client/.claude/worktrees/maplibre-perf/packages/flutter_map_maplibre && fvm flutter test test/tick_gate_test.dart`
+Run: `cd <package root> && fvm flutter test test/tick_gate_test.dart`
 Expected: COMPILE ERROR — `decideSleep` is not defined.
 
 - [ ] **Step 3: Add `decideSleep` and the interface members to `basemap_renderer.dart`**
@@ -246,18 +246,18 @@ Replace the fake's `setStyle` with (the real one clears the latch):
 
 - [ ] **Step 6: Run the package suite**
 
-Run: `cd /Users/sushakov/Projects/vedu-app/vedu_app_client/.claude/worktrees/maplibre-perf/packages/flutter_map_maplibre && fvm flutter test`
+Run: `cd <package root> && fvm flutter test`
 Expected: ALL PASS (the four new sleep tests plus every existing test).
 
 - [ ] **Step 7: Format and analyze**
 
-Run: `cd /Users/sushakov/Projects/vedu-app/vedu_app_client/.claude/worktrees/maplibre-perf && fvm dart format packages/flutter_map_maplibre/lib/src/basemap_renderer.dart packages/flutter_map_maplibre/lib/src/ffi/ffi_basemap_renderer.dart packages/flutter_map_maplibre/test/tick_gate_test.dart packages/flutter_map_maplibre/test/maplibre_basemap_test.dart && cd packages/flutter_map_maplibre && fvm flutter analyze`
+Run: `cd <host app worktree> && fvm dart format packages/flutter_map_maplibre/lib/src/basemap_renderer.dart packages/flutter_map_maplibre/lib/src/ffi/ffi_basemap_renderer.dart packages/flutter_map_maplibre/test/tick_gate_test.dart packages/flutter_map_maplibre/test/maplibre_basemap_test.dart && cd packages/flutter_map_maplibre && fvm flutter analyze`
 Expected: no issues.
 
 - [ ] **Step 8: Commit**
 
 ```bash
-cd /Users/sushakov/Projects/vedu-app/vedu_app_client/.claude/worktrees/maplibre-perf && \
+cd <host app worktree> && \
 git add packages/flutter_map_maplibre/lib/src/basemap_renderer.dart \
         packages/flutter_map_maplibre/lib/src/ffi/ffi_basemap_renderer.dart \
         packages/flutter_map_maplibre/test/tick_gate_test.dart \
@@ -378,7 +378,7 @@ Append inside `main()` of `packages/flutter_map_maplibre/test/maplibre_basemap_t
 
 - [ ] **Step 2: Run the new tests to verify they fail**
 
-Run: `cd /Users/sushakov/Projects/vedu-app/vedu_app_client/.claude/worktrees/maplibre-perf/packages/flutter_map_maplibre && fvm flutter test test/maplibre_basemap_test.dart`
+Run: `cd <package root> && fvm flutter test test/maplibre_basemap_test.dart`
 Expected: the five new tests FAIL (ticker never parks, `pumpWorkCalls` stays 0, diagnostics lack the new keys); all pre-existing tests still pass.
 
 - [ ] **Step 3: Implement the gate in `maplibre_basemap.dart`**
@@ -476,18 +476,18 @@ insert:
 
 - [ ] **Step 4: Run the package suite**
 
-Run: `cd /Users/sushakov/Projects/vedu-app/vedu_app_client/.claude/worktrees/maplibre-perf/packages/flutter_map_maplibre && fvm flutter test`
+Run: `cd <package root> && fvm flutter test`
 Expected: ALL PASS.
 
 - [ ] **Step 5: Format and analyze**
 
-Run: `cd /Users/sushakov/Projects/vedu-app/vedu_app_client/.claude/worktrees/maplibre-perf && fvm dart format packages/flutter_map_maplibre/lib/src/maplibre_basemap.dart packages/flutter_map_maplibre/test/maplibre_basemap_test.dart && cd packages/flutter_map_maplibre && fvm flutter analyze`
+Run: `cd <host app worktree> && fvm dart format packages/flutter_map_maplibre/lib/src/maplibre_basemap.dart packages/flutter_map_maplibre/test/maplibre_basemap_test.dart && cd packages/flutter_map_maplibre && fvm flutter analyze`
 Expected: no issues.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /Users/sushakov/Projects/vedu-app/vedu_app_client/.claude/worktrees/maplibre-perf && \
+cd <host app worktree> && \
 git add packages/flutter_map_maplibre/lib/src/maplibre_basemap.dart \
         packages/flutter_map_maplibre/test/maplibre_basemap_test.dart && \
 git commit -m "feat(flutter_map_maplibre): park the basemap ticker when the map idles"
@@ -506,7 +506,7 @@ No code. The acceptance test from the spec, run with the user's iPhone:
 - [ ] **Step 3: Retrieve the JSONL** (share chip → AirDrop to ~/Downloads) and compare against the 2026-07-23 maplibre leg:
 
 ```bash
-cd /Users/sushakov/Projects/vedu-app/vedu_app_client/.claude/worktrees/maplibre-perf && \
+cd <host app worktree> && \
 fvm dart run tools/soak_report.dart ~/Downloads/<new-run>.jsonl /Users/sushakov/Downloads/soak-20260723-231407.jsonl -o <scratchpad>/ticker-gate-ab.html
 ```
 

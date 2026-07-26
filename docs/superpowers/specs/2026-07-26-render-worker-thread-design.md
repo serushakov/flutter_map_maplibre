@@ -6,7 +6,7 @@
 
 On Android, every admitted vector render executes synchronously on the UI
 thread inside the widget's build path. Measured on OnePlus 8 Pro (profile
-build, Vedu osm-liberty style, soak-recorder frame timings):
+build, the host app's osm-liberty style, soak-recorder frame timings):
 
 | hard pan | raster tiles | maplibre |
 |---|---|---|

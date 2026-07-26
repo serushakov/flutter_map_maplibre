@@ -177,7 +177,7 @@ extern "C" {
 // reach the platform trust store. Without it every tile request fails TLS
 // validation and the map renders its background colour and nothing else.
 JNIEXPORT jint JNICALL
-Java_com_veduapp_flutter_1map_1maplibre_MlnNative_nativeAndroidInit(
+Java_io_ushakov_flutter_1map_1maplibre_MlnNative_nativeAndroidInit(
     JNIEnv* env, jclass clazz, jobject context) {
   return mln_android_init(env, clazz, context);
 }
@@ -188,7 +188,7 @@ Java_com_veduapp_flutter_1map_1maplibre_MlnNative_nativeAndroidInit(
 // Dart UI thread for the synchronous renderer, the render worker thread for
 // WorkerBasemapRenderer (see fmm_worker.cpp).
 JNIEXPORT jlong JNICALL
-Java_com_veduapp_flutter_1map_1maplibre_MlnNative_nativePresenterCreate(
+Java_io_ushakov_flutter_1map_1maplibre_MlnNative_nativePresenterCreate(
     JNIEnv* env, jclass, jlong presenterId, jobject jsurface, jint width,
     jint height, jdouble scale) {
   auto* p = new Presenter();
@@ -295,13 +295,13 @@ Java_com_veduapp_flutter_1map_1maplibre_MlnNative_nativePresenterCreate(
 // stays registered so fmm_present can report kErrSurfaceLost instead of
 // touching a dead surface.
 JNIEXPORT void JNICALL
-Java_com_veduapp_flutter_1map_1maplibre_MlnNative_nativePresenterInvalidate(
+Java_io_ushakov_flutter_1map_1maplibre_MlnNative_nativePresenterInvalidate(
     JNIEnv*, jclass, jlong presenterId) {
   if (auto* p = findPresenter(presenterId)) p->surfaceLost = true;
 }
 
 JNIEXPORT void JNICALL
-Java_com_veduapp_flutter_1map_1maplibre_MlnNative_nativePresenterDestroy(
+Java_io_ushakov_flutter_1map_1maplibre_MlnNative_nativePresenterDestroy(
     JNIEnv*, jclass, jlong presenterId) {
   Presenter* p = nullptr;
   {

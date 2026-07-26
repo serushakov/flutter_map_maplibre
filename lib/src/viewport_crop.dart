@@ -12,9 +12,9 @@ import 'package:flutter_map/flutter_map.dart';
 ///         full.latLngToScreenOffset(p) - visibleRect.topLeft
 ///
 /// which is what lets a fixed-size texture cover just the visible part of a
-/// deliberately oversized map layer (Vedu lays the map out taller than the
-/// screen to push the camera center above the bottom sheet; the overflow is
-/// clipped offscreen and need never be rendered).
+/// deliberately oversized map layer (a host app may lay the map out taller
+/// than the screen to push the camera center above a bottom sheet; the
+/// overflow is clipped offscreen and need never be rendered).
 ///
 /// Returns [full] itself when the rect covers the whole viewport: the
 /// center round-trip through the projection carries a float epsilon that

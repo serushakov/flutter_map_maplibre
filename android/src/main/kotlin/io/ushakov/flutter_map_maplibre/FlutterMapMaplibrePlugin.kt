@@ -1,4 +1,4 @@
-package com.veduapp.flutter_map_maplibre
+package io.ushakov.flutter_map_maplibre
 
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.plugin.common.MethodCall

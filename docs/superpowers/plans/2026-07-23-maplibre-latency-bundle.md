@@ -179,7 +179,7 @@ Replace lines 23–25 with:
 - [ ] **Step 3: Verify the example app compiles for the simulator**
 
 ```bash
-cd /Users/sushakov/Projects/vedu-app/vedu_app_client/packages/flutter_map_maplibre/example
+cd <host app repo>/packages/flutter_map_maplibre/example
 fvm flutter build ios --simulator --debug
 ```
 
@@ -188,7 +188,7 @@ Expected: `✓ Built .../Runner.app`. Compile errors here mean the restructure l
 - [ ] **Step 4: Commit**
 
 ```bash
-cd /Users/sushakov/Projects/vedu-app/vedu_app_client
+cd <host app repo>
 git add packages/flutter_map_maplibre/ios/flutter_map_maplibre/Sources/flutter_map_maplibre/MLNBridge.m \
         packages/flutter_map_maplibre/ios/flutter_map_maplibre/Sources/flutter_map_maplibre/MLNBridge.h
 git commit -m "perf(flutter_map_maplibre): gate display-link renders on MapLibre update events"
@@ -300,7 +300,7 @@ In `FlutterMapMaplibrePlugin.swift`, replace the `setCamera` block (lines 50–5
 - [ ] **Step 4: Verify the example app compiles for the simulator**
 
 ```bash
-cd /Users/sushakov/Projects/vedu-app/vedu_app_client/packages/flutter_map_maplibre/example
+cd <host app repo>/packages/flutter_map_maplibre/example
 fvm flutter build ios --simulator --debug
 ```
 
@@ -309,7 +309,7 @@ Expected: `✓ Built .../Runner.app`. A Swift error at the `bridge.setCameraAndR
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Users/sushakov/Projects/vedu-app/vedu_app_client
+cd <host app repo>
 git add packages/flutter_map_maplibre/ios/flutter_map_maplibre/Sources/flutter_map_maplibre/MLNBridge.h \
         packages/flutter_map_maplibre/ios/flutter_map_maplibre/Sources/flutter_map_maplibre/MLNBridge.m \
         packages/flutter_map_maplibre/ios/flutter_map_maplibre/Sources/flutter_map_maplibre/MapLibreProbe.swift \
@@ -396,7 +396,7 @@ void main() {
 - [ ] **Step 2: Run the tests to verify they fail**
 
 ```bash
-cd /Users/sushakov/Projects/vedu-app/vedu_app_client/packages/flutter_map_maplibre
+cd <host app repo>/packages/flutter_map_maplibre
 fvm flutter test test/maplibre_channel_test.dart
 ```
 
@@ -450,7 +450,7 @@ Expected: all 4 tests PASS. (`maplibre_basemap.dart` still compiles: it currentl
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Users/sushakov/Projects/vedu-app/vedu_app_client
+cd <host app repo>
 git add packages/flutter_map_maplibre/lib/src/maplibre_channel.dart \
         packages/flutter_map_maplibre/test/maplibre_channel_test.dart
 git commit -m "feat(flutter_map_maplibre): setCamera reports whether the frame landed"
@@ -664,7 +664,7 @@ void main() {
 - [ ] **Step 2: Run the tests to verify they fail**
 
 ```bash
-cd /Users/sushakov/Projects/vedu-app/vedu_app_client/packages/flutter_map_maplibre
+cd <host app repo>/packages/flutter_map_maplibre
 fvm flutter test test/maplibre_basemap_test.dart
 ```
 
@@ -787,7 +787,7 @@ Expected: all tests PASS, including the pre-existing `camera_conventions_test.da
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Users/sushakov/Projects/vedu-app/vedu_app_client
+cd <host app repo>
 git add packages/flutter_map_maplibre/lib/src/maplibre_basemap.dart \
         packages/flutter_map_maplibre/test/maplibre_basemap_test.dart
 git commit -m "perf(flutter_map_maplibre): push camera at build time and stamp only landed frames"
@@ -795,7 +795,7 @@ git commit -m "perf(flutter_map_maplibre): push camera at build time and stamp o
 
 ---
 
-### Task 5: Vedu — surface the new numbers in the overlay and MLNDIAG line
+### Task 5: host app — surface the new numbers in the overlay and MLNDIAG line
 
 **Files:**
 - Modify: `lib/screens/main_map/main_map_map_view/maplibre_basemap_layer.dart`
@@ -837,10 +837,10 @@ In `MaplibreDiagnosticsOverlay`, replace the `row('rendersWithoutUpdate')` line 
 
 (keeping the surrounding rows as they are).
 
-- [ ] **Step 3: Format, analyze, run Vedu's tests**
+- [ ] **Step 3: Format, analyze, run the host app's tests**
 
 ```bash
-cd /Users/sushakov/Projects/vedu-app/vedu_app_client
+cd <host app repo>
 fvm dart format lib/screens/main_map/main_map_map_view/maplibre_basemap_layer.dart
 fvm flutter analyze lib/screens/main_map/main_map_map_view/maplibre_basemap_layer.dart
 ```
@@ -866,7 +866,7 @@ This is the spec's §4 protocol — it needs the physical device and the user dr
 - [ ] **Step 1: Build and run on the device, streaming MLNDIAG**
 
 ```bash
-cd /Users/sushakov/Projects/vedu-app/vedu_app_client
+cd <host app repo>
 fvm flutter run --profile -d 00008140-00084C990EA3001C
 ```
 

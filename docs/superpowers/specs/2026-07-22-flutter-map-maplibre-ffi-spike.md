@@ -2,7 +2,7 @@
 
 Date: 2026-07-22
 Status: **working on iOS simulator.** A real MapLibre vector map, served from
-`tiles.api.veduapp.com`, rendering inside a Flutter `Texture` widget with the
+`tiles.example.com`, rendering inside a Flutter `Texture` widget with the
 camera driven from the host.
 
 Screenshot: `packages/flutter_map_maplibre/maplibre-ios-simulator.png`
@@ -51,7 +51,7 @@ buffer-rotation and async-completion changes are optimisations, not blockers.
 ### Integration
 
 6. **The FFI forces iOS 14.3 minimum** (`CMAKE_OSX_DEPLOYMENT_TARGET` in the
-   Apple presets). Non-issue for Vedu, which targets 17.0, but it propagates to
+   Apple presets). Non-issue for the host app, which targets 17.0, but it propagates to
    any consuming app and the error is a hard build failure.
 7. **There is no x86_64 simulator preset — arm64 only.** Xcode builds a
    *universal* simulator binary by default (`ARCHS = arm64 x86_64`), so the
@@ -177,7 +177,7 @@ clear-to-red probe worked precisely because *we* drew into the surface directly.
 
 ## Android, working (2026-07-22, later still)
 
-**Status: working.** A real MapLibre vector map from `tiles.api.veduapp.com`
+**Status: working.** A real MapLibre vector map from `tiles.example.com`
 renders inside a Flutter `Texture` on Android, camera driven from the host —
 `styleLoaded: true`, `lastEvent: null`, `glError: 0`, `attachStatus: 0`.
 
@@ -235,7 +235,7 @@ APK with zero host configuration. Verified present in `classes.dex`.
 ### What is still blocked
 
 HTTPS fails on the API 33 emulator with `invalid peer certificate: Revoked`
-against **both** `tiles.api.veduapp.com` (Let's Encrypt YE1) and
+against **both** `tiles.example.com` (Let's Encrypt YE1) and
 `demotiles.maplibre.org` (Google Trust Services WE1) — two different CAs, both
 certificates valid, device clock correct. Every host fails, so this is not our
 server and not our certificate.
@@ -259,7 +259,7 @@ What is established:
   This label is what made the bug so slow to diagnose — it asserts a specific
   cause the code never actually established.
 - No other TLS client on the device runs that second pass, which is why the
-  certificate works everywhere else (production Vedu on Android, browsers) and
+  certificate works everywhere else (the production app on Android, browsers) and
   why iOS never hit it: Apple builds use NSURLSession, with no Rust or rustls in
   the picture at all.
 
@@ -441,7 +441,7 @@ to the same camera in the same call).
 
 ### Integration
 
-Wired into Vedu behind a debug-menu toggle ("Native MapLibre basemap"), raster
+Wired into the host app behind a debug-menu toggle ("Native MapLibre basemap"), raster
 TileLayer still the default. Two host-app portability fixes were required and
 are documented in the commit: latlong2 constraint relaxed to flutter_map's own
 range, and the podspec's app-target search path moved off an example-relative
@@ -449,7 +449,7 @@ path onto Flutter's plugin symlink.
 
 ## Running the integrated app on a device — two non-MapLibre walls (2026-07-23)
 
-Neither was caused by the package; both are Vedu's own build/signing setup
+Neither was caused by the package; both are the host app's own build/signing setup
 surfacing for the first time because the app had never been installed directly
 on a device (it ships only via TestFlight).
 
@@ -464,9 +464,9 @@ on a device (it ships only via TestFlight).
    `-lmln-stripped not found`, at link, not a const-extraction step.)
 
 2. **Distribution-only signing.** Every build config (Debug/Profile/Release,
-   Runner + VeduWidget) is Manual / Apple Distribution / `match AppStore`, so
+   Runner + AppWidget) is Manual / Apple Distribution / `match AppStore`, so
    `flutter run` signs for the App Store and the install is rejected with
-   0xe800801f "Attempted to install a Beta profile". Vedu has no development
+   0xe800801f "Attempted to install a Beta profile". The host app has no development
    signing path because it deploys through TestFlight. For local device
    testing, the configs were temporarily flipped to Automatic signing with the
    existing Apple Development cert (team YVG657396L), built, then reverted with

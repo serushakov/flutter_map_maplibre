@@ -114,7 +114,7 @@ void main() {
     );
   });
 
-  test('cropped viewport of a taller layer, the Vedu sheet shape', () {
+  test('cropped viewport of a taller layer, the bottom-sheet shape', () {
     // Layer 400x1000, visible bottom 400x800 strip; rendered camera is the
     // crop itself → covered exactly.
     final layer = cameraAt(size: const Size(400, 1000));

@@ -101,9 +101,9 @@ class MapLibreBasemap extends StatefulWidget {
 
   /// When set, the texture viewport is pinned to this size and layout size
   /// changes never recreate the session. Use when the layer's widget is
-  /// deliberately laid out larger than what is visible (Vedu lays the map
-  /// out taller than the screen to push the camera center above the bottom
-  /// sheet): pass the truly visible size and the offscreen remainder is
+  /// deliberately laid out larger than what is visible (a host app may lay
+  /// the map out taller than the screen to push the camera center above a
+  /// bottom sheet): pass the truly visible size and the offscreen remainder is
   /// never rendered. Null means the layout size is the viewport, recreating
   /// on any layout change.
   final Size? fixedViewport;

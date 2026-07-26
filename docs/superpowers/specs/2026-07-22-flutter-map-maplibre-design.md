@@ -8,7 +8,7 @@ findings" below. Implementation plan:
 ## Problem
 
 The map renders raster tiles through `flutter_map`'s `TileLayer`, served from a
-self-hosted tileserver-gl instance at `tiles.api.veduapp.com`. Two costs
+self-hosted tileserver-gl instance at `tiles.example.com`. Two costs
 motivate changing this:
 
 - **Visual quality.** Raster tiles are fixed-zoom bitmaps. Zoom is stepped
@@ -78,7 +78,7 @@ ownership.
 
 A headless MapLibre renderer with a continuous render loop, drawing into a
 Flutter-registered texture, pointed at the existing
-`tiles.api.veduapp.com/styles/osm-liberty/style.json`. Glyphs, sprites and
+`tiles.example.com/styles/osm-liberty/style.json`. Glyphs, sprites and
 `/data/estonia-vector/{z}/{x}/{y}.pbf` resolve through the style exactly as
 they do server-side today — no new hosting.
 
@@ -125,7 +125,7 @@ packages/flutter_map_maplibre/
   lib/           NativeBasemapLayer, camera bridge, controller
   ios/           Swift — FlutterTexture + MapLibre Metal renderer
   android/       Kotlin — SurfaceTextureEntry + MapLibre renderer
-  example/       standalone harness, no Vedu dependencies
+  example/       standalone harness, no host-app dependencies
 ```
 
 Named for the `flutter_map_<capability>` convention used across the plugin

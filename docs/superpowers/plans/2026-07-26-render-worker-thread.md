@@ -1604,7 +1604,7 @@ adb -s ca4bbe3f install -r build/app/outputs/flutter-apk/app-profile.apk
 
 Verify: map renders, pans, markers glued (the example's latency-cycle FAB re-tunes `WorkerBasemapRenderer.presentLatencyFrames` — point it at the new static).
 
-- [ ] **Step 2: Profile build of Vedu; soak-rec A/B**
+- [ ] **Step 2: Profile build of the host app; soak-rec A/B**
 
 ```bash
 fvm flutter build apk --profile --target-platform android-arm64

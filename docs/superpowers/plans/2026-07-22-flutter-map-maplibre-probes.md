@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - Flutter is pinned to **3.44.5** via fvm. Every Flutter/Dart command is prefixed `fvm`.
-- The package has **zero dependencies on Vedu app code**. It must build and run standalone.
+- The package has **zero dependencies on host app code**. It must build and run standalone.
 - After editing any `.dart` file, run `fvm dart format <paths>` — the editor formats on save and the repo must match.
 - Package name is `flutter_map_maplibre`, following the `flutter_map_<capability>` ecosystem convention.
 - **The iOS probe MUST be verified on a physical device, not the simulator.** The simulator's `SimMetalHost` XPC service is currently crash-looping on this machine (see `Runner.crash` / `WidgetRender.crash`, 2026-07-22); a simulator failure would be indistinguishable from a probe failure.
@@ -64,10 +64,10 @@ Split rationale: the channel/registry plumbing and the graphics code have differ
 - [ ] **Step 1: Create the package**
 
 ```bash
-cd /Users/sushakov/Projects/vedu-app/vedu_app_client
+cd <host app repo>
 fvm flutter create --template=plugin --platforms=android,ios \
   -a kotlin -i swift \
-  --org com.veduapp --project-name flutter_map_maplibre \
+  --org io.ushakov --project-name flutter_map_maplibre \
   packages/flutter_map_maplibre
 ```
 
@@ -229,7 +229,7 @@ Expected: PASS — 3 tests.
 - [ ] **Step 6: Format and commit**
 
 ```bash
-cd /Users/sushakov/Projects/vedu-app/vedu_app_client
+cd <host app repo>
 fvm dart format packages/flutter_map_maplibre/lib/src/probe.dart \
   packages/flutter_map_maplibre/lib/flutter_map_maplibre.dart \
   packages/flutter_map_maplibre/test/probe_test.dart
@@ -242,8 +242,8 @@ git commit -m "feat(flutter_map_maplibre): package scaffold and Dart probe clien
 ### Task 2: Android probe — EGL into Flutter's SurfaceProducer
 
 **Files:**
-- Create: `packages/flutter_map_maplibre/android/src/main/kotlin/com/veduapp/flutter_map_maplibre/EglProbe.kt`
-- Modify: `packages/flutter_map_maplibre/android/src/main/kotlin/com/veduapp/flutter_map_maplibre/FlutterMapMaplibrePlugin.kt` (replace generated boilerplate)
+- Create: `packages/flutter_map_maplibre/android/src/main/kotlin/io/ushakov/flutter_map_maplibre/EglProbe.kt`
+- Modify: `packages/flutter_map_maplibre/android/src/main/kotlin/io/ushakov/flutter_map_maplibre/FlutterMapMaplibrePlugin.kt` (replace generated boilerplate)
 
 **Interfaces:**
 - Consumes: the channel contract from Task 1 — `flutter_map_maplibre/probe`, method `runProbe`, args `{'width': Int, 'height': Int}`, returns `Map<String, Any?>` with `ok`/`textureId`/`error`/`diagnostics`.
@@ -256,7 +256,7 @@ git commit -m "feat(flutter_map_maplibre): package scaffold and Dart probe clien
 Create `EglProbe.kt`:
 
 ```kotlin
-package com.veduapp.flutter_map_maplibre
+package io.ushakov.flutter_map_maplibre
 
 import android.opengl.EGL14
 import android.opengl.EGLConfig
@@ -376,7 +376,7 @@ class EglProbe {
 Replace the contents of `FlutterMapMaplibrePlugin.kt`:
 
 ```kotlin
-package com.veduapp.flutter_map_maplibre
+package io.ushakov.flutter_map_maplibre
 
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.plugin.common.MethodCall
