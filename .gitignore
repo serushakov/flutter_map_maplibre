@@ -33,3 +33,9 @@ migrate_working_dir/
 /coverage/
 MaplibreNativeC.xcframework/
 android/src/main/cpp/prebuilt/
+
+# fvm
+.fvm/
+
+# Claude Code scratch
+.claude/
