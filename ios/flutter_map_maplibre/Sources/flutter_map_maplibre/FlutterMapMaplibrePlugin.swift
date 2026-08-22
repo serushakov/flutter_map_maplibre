@@ -7,8 +7,8 @@ public class FlutterMapMaplibrePlugin: NSObject, FlutterPlugin {
   // Held so the texture outlives the call; the example app keeps showing it.
   private var probe: MetalProbe?
   private var textureId: Int64?
-  private var presenter: TexturePresenter?
-  private var presenterTextureId: Int64?
+  // Live presenters keyed by texture id — one per MapLibreBasemap.
+  private var presenters: [Int64: TexturePresenter] = [:]
 
   init(textures: FlutterTextureRegistry) {
     self.textures = textures
@@ -34,11 +34,8 @@ public class FlutterMapMaplibrePlugin: NSObject, FlutterPlugin {
         result(["ok": false, "error": "TexturePresenter init failed"])
         return
       }
-      // One presenter per plugin instance; replacing tears the old one down.
-      disposePresenter()
-      self.presenter = presenter
       let id = textures.register(presenter)
-      presenterTextureId = id
+      presenters[id] = presenter
       PresenterRegistry.lock.lock()
       PresenterRegistry.entries[id] = (presenter, textures)
       PresenterRegistry.lock.unlock()
@@ -53,7 +50,10 @@ public class FlutterMapMaplibrePlugin: NSObject, FlutterPlugin {
       return
     }
     if call.method == "disposeTextures" {
-      disposePresenter()
+      let args = call.arguments as? [String: Any] ?? [:]
+      if let id = (args["textureId"] as? NSNumber)?.int64Value {
+        disposePresenter(id)
+      }
       result(nil)
       return
     }
@@ -95,14 +95,15 @@ public class FlutterMapMaplibrePlugin: NSObject, FlutterPlugin {
     result(payload)
   }
 
-  private func disposePresenter() {
-    if let id = presenterTextureId {
-      PresenterRegistry.lock.lock()
-      PresenterRegistry.entries.removeValue(forKey: id)
-      PresenterRegistry.lock.unlock()
-      textures.unregisterTexture(id)
-    }
-    presenter = nil
-    presenterTextureId = nil
+  private func disposePresenter(_ id: Int64) {
+    guard presenters.removeValue(forKey: id) != nil else { return }
+    PresenterRegistry.lock.lock()
+    PresenterRegistry.entries.removeValue(forKey: id)
+    PresenterRegistry.lock.unlock()
+    textures.unregisterTexture(id)
+  }
+
+  public func detachFromEngine(for registrar: FlutterPluginRegistrar) {
+    for id in Array(presenters.keys) { disposePresenter(id) }
   }
 }

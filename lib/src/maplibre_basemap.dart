@@ -214,7 +214,10 @@ class _MapLibreBasemapState extends State<MapLibreBasemap>
     _diagnosticsTimer?.cancel();
     _settleTimer?.cancel();
     _renderer.dispose();
-    _channel.disposeTextures();
+    final textureId = _textureId;
+    if (textureId != null) {
+      _channel.disposeTextures(textureId: textureId);
+    }
     super.dispose();
   }
 
@@ -292,9 +295,10 @@ class _MapLibreBasemapState extends State<MapLibreBasemap>
     );
 
     // Resize path: the borrowed-texture session cannot be resized in place.
-    if (_textureId != null) {
+    final staleTextureId = _textureId;
+    if (staleTextureId != null) {
       _renderer.dispose();
-      await _channel.disposeTextures();
+      await _channel.disposeTextures(textureId: staleTextureId);
       _textureId = null;
     }
 
@@ -317,7 +321,10 @@ class _MapLibreBasemapState extends State<MapLibreBasemap>
       widget.onDiagnostics?.call(result.diagnostics);
       // On !mounted the native presenter was still created; without this it
       // sits orphaned at viewport-resolution GPU memory until the next create.
-      _channel.disposeTextures();
+      final orphanId = result.textureId;
+      if (orphanId != null) {
+        _channel.disposeTextures(textureId: orphanId);
+      }
       // A previously-parked widget's insurance pump would otherwise run
       // forever against a session that no longer exists; nothing else will
       // restart the ticker on this dead path.
@@ -339,7 +346,7 @@ class _MapLibreBasemapState extends State<MapLibreBasemap>
       debugPrint('MLNCREATE renderer failed diag=${_renderer.diagnostics()}');
       widget.onDiagnostics?.call(_renderer.diagnostics());
       // The renderer failed but the presenter exists — don't orphan it.
-      _channel.disposeTextures();
+      _channel.disposeTextures(textureId: result.textureId!);
       // Same as above: don't leave the insurance pump running against a
       // renderer create that failed.
       _insurancePump?.cancel();

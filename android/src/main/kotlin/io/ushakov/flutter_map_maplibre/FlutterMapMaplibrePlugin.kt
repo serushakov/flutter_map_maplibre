@@ -19,8 +19,8 @@ class FlutterMapMaplibrePlugin :
     private lateinit var textureRegistry: TextureRegistry
     private var androidInitStatus: Int? = null
 
-    /** One presenter per plugin instance, same as the iOS plugin. */
-    private var producer: TextureRegistry.SurfaceProducer? = null
+    /** Live presenters keyed by texture id — one per MapLibreBasemap. */
+    private val producers = mutableMapOf<Long, TextureRegistry.SurfaceProducer>()
 
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         channel = MethodChannel(binding.binaryMessenger, "flutter_map_maplibre/probe")
@@ -40,7 +40,9 @@ class FlutterMapMaplibrePlugin :
         when (call.method) {
             "createTextures" -> handleCreateTextures(call, result)
             "disposeTextures" -> {
-                disposePresenter()
+                call.argument<Number>("textureId")?.let {
+                    disposePresenter(it.toLong())
+                }
                 result.success(null)
             }
             else -> result.notImplemented()
@@ -51,9 +53,6 @@ class FlutterMapMaplibrePlugin :
         val width = call.argument<Int>("width") ?: 0
         val height = call.argument<Int>("height") ?: 0
         val scale = call.argument<Double>("scale") ?: 1.0
-
-        // The widget recreates on resize; a stale presenter here is a leak.
-        disposePresenter()
 
         try {
             val surfaceProducer = textureRegistry.createSurfaceProducer()
@@ -97,7 +96,7 @@ class FlutterMapMaplibrePlugin :
                 }
             })
 
-            producer = surfaceProducer
+            producers[presenterId] = surfaceProducer
             result.success(
                 mapOf(
                     "ok" to true,
@@ -116,16 +115,15 @@ class FlutterMapMaplibrePlugin :
         }
     }
 
-    private fun disposePresenter() {
-        producer?.let {
+    private fun disposePresenter(textureId: Long) {
+        producers.remove(textureId)?.let {
             MlnNative.nativePresenterDestroy(it.id())
             it.release()
         }
-        producer = null
     }
 
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         channel.setMethodCallHandler(null)
-        disposePresenter()
+        producers.keys.toList().forEach(::disposePresenter)
     }
 }

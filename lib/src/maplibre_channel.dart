@@ -57,9 +57,11 @@ class MapLibreChannel {
     }
   }
 
-  Future<void> disposeTextures() async {
+  Future<void> disposeTextures({required int textureId}) async {
     try {
-      await channel.invokeMethod<void>('disposeTextures');
+      await channel.invokeMethod<void>('disposeTextures', <String, Object?>{
+        'textureId': textureId,
+      });
     } on PlatformException {
       // Teardown is best-effort.
     }

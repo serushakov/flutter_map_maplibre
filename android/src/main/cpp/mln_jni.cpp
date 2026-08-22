@@ -157,7 +157,9 @@ void destroyPresenter(Presenter* p) {
     }
     if (p->surface != EGL_NO_SURFACE) eglDestroySurface(p->display, p->surface);
     if (p->context != EGL_NO_CONTEXT) eglDestroyContext(p->display, p->context);
-    eglTerminate(p->display);
+    // No eglTerminate: the default display is one process-wide connection
+    // (eglInitialize is not refcounted), so terminating it here would
+    // invalidate every other live presenter's EGL objects mid-frame.
   }
   if (p->window) ANativeWindow_release(p->window);
   delete p;

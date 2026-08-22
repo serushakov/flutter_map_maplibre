@@ -78,7 +78,8 @@ class _FfiPresentProbeState extends State<FfiPresentProbe>
   @override
   void dispose() {
     _ticker?.dispose();
-    _channel.disposeTextures();
+    final id = _textureId;
+    if (id != null) _channel.disposeTextures(textureId: id);
     super.dispose();
   }
 

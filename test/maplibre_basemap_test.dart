@@ -99,7 +99,7 @@ class _FakeRenderer implements BasemapRenderer {
 /// given, delays every createTextures response — the shape of the real
 /// method-channel round trip, during which more frames (and more post-frame
 /// _create callbacks) happen.
-void installChannelMock({Future<void>? gate}) {
+void installChannelMock({Future<void>? gate, List<int>? disposed}) {
   var nextTextureId = 1;
   TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
       .setMockMethodCallHandler(MapLibreChannel.channel, (call) async {
@@ -112,6 +112,11 @@ void installChannelMock({Future<void>? gate}) {
               'backTexture': 0xDEAD,
               'diagnostics': <String, Object?>{},
             };
+          case 'disposeTextures':
+            // Dispose is id-addressed: presenters are keyed per widget, so a
+            // dispose must name its own texture, never "the latest one".
+            disposed?.add((call.arguments as Map)['textureId']! as int);
+            return null;
           default:
             return null;
         }
@@ -766,6 +771,21 @@ void main() {
     await tester.pump(const Duration(milliseconds: 16));
     await tester.pump(const Duration(seconds: 1));
     expect(latest!['underRenderPx'], closeTo(0, 0.01));
+  });
+
+  testWidgets('dispose names this widget\'s own texture id', (tester) async {
+    final disposed = <int>[];
+    installChannelMock(disposed: disposed);
+    controller = MapController();
+    await pumpSizedMap(tester, height: 600);
+    // Resize path: the old session's texture (id 1) is disposed by name and
+    // the recreate gets a fresh id.
+    await pumpSizedMap(tester, height: 700);
+    await tester.pump();
+    expect(disposed, [1]);
+    // Widget teardown disposes the live texture (id 2), again by name.
+    await tester.pumpWidget(const SizedBox.shrink());
+    expect(disposed, [1, 2]);
   });
 
   testWidgets('changing overRenderFactor recreates the session', (
