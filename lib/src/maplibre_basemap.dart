@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_map/flutter_map.dart';
@@ -152,6 +153,13 @@ class _MapLibreBasemapState extends State<MapLibreBasemap>
 
   Ticker? _ticker;
   Timer? _insurancePump;
+
+  /// TickerMode for this subtree — false while a dormant route holds the
+  /// widget under an opaque route (the mixin already mutes [_ticker] off it).
+  /// Diagnostics polling follows it so a covered map stops publishing:
+  /// with several live maps feeding one host-app sink, only the focused
+  /// route's map should be heard (see [_onTickerModeChanged]).
+  ValueListenable<TickerModeData>? _tickerModeNotifier;
   int _parks = 0;
   bool _creating = false;
   Timer? _diagnosticsTimer;
@@ -193,6 +201,30 @@ class _MapLibreBasemapState extends State<MapLibreBasemap>
   MapCamera? _settleArmedFor;
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final notifier = TickerMode.getValuesNotifier(context);
+    if (!identical(notifier, _tickerModeNotifier)) {
+      _tickerModeNotifier?.removeListener(_onTickerModeChanged);
+      _tickerModeNotifier = notifier..addListener(_onTickerModeChanged);
+      _onTickerModeChanged();
+    }
+  }
+
+  /// Pause diagnostics polling while muted; resume when the route is focused
+  /// again. Everything else keeps its own policy: the ticker is muted by the
+  /// provider mixin, and the insurance pump stays — it drives functional
+  /// owner-thread work (tile expiry), not observability.
+  void _onTickerModeChanged() {
+    if (_tickerModeNotifier?.value.enabled ?? true) {
+      if (_textureId != null) _startDiagnosticsPolling();
+    } else {
+      _diagnosticsTimer?.cancel();
+      _diagnosticsTimer = null;
+    }
+  }
+
+  @override
   void didUpdateWidget(MapLibreBasemap oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.styleUrl != widget.styleUrl) {
@@ -209,6 +241,7 @@ class _MapLibreBasemapState extends State<MapLibreBasemap>
     debugPrint(
       'MLNDISPOSE state=${identityHashCode(this)} textureId=$_textureId',
     );
+    _tickerModeNotifier?.removeListener(_onTickerModeChanged);
     _ticker?.dispose();
     _insurancePump?.cancel();
     _diagnosticsTimer?.cancel();
@@ -254,6 +287,7 @@ class _MapLibreBasemapState extends State<MapLibreBasemap>
 
   void _startDiagnosticsPolling() {
     if (widget.onDiagnostics == null || _diagnosticsTimer != null) return;
+    if (!(_tickerModeNotifier?.value.enabled ?? true)) return;
     _diagnosticsTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (!mounted) return;
       widget.onDiagnostics?.call(<String, Object?>{

@@ -370,6 +370,50 @@ void main() {
     );
   });
 
+  testWidgets('diagnostics polling pauses while TickerMode mutes the route', (
+    tester,
+  ) async {
+    // The dormant-map shape: an opaque route on top mutes the subtree via
+    // TickerMode. With several live maps feeding one host-app diagnostics
+    // sink, only the focused route's map may publish.
+    var polls = 0;
+    controller = MapController();
+    Widget host({required bool enabled}) => MaterialApp(
+      home: TickerMode(
+        enabled: enabled,
+        child: FlutterMap(
+          mapController: controller,
+          options: const MapOptions(
+            initialCenter: LatLng(59.437, 24.7536),
+            initialZoom: 13,
+          ),
+          children: [
+            MapLibreBasemap(
+              styleUrl: 'https://example.com/style.json',
+              onDiagnostics: (_) => polls++,
+              rendererFactory: () => renderer,
+            ),
+          ],
+        ),
+      ),
+    );
+    await tester.pumpWidget(host(enabled: true));
+    await tester.pump();
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 1));
+    expect(polls, 1);
+
+    // Covered: the timer stops, not just the ticks.
+    await tester.pumpWidget(host(enabled: false));
+    await tester.pump(const Duration(seconds: 3));
+    expect(polls, 1);
+
+    // Popped back: polling resumes.
+    await tester.pumpWidget(host(enabled: true));
+    await tester.pump(const Duration(seconds: 1));
+    expect(polls, 2);
+  });
+
   testWidgets('reports renderer diagnostics on the polling timer', (
     tester,
   ) async {
