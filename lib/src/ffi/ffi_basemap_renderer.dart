@@ -45,6 +45,21 @@ class FfiBasemapRenderer implements BasemapRenderer {
         'fmm_attach',
       );
 
+  /// The mln runtime is one-per-thread (a second mln_runtime_create on the
+  /// same thread returns MLN_STATUS_INVALID_STATE), and every
+  /// FfiBasemapRenderer lives on the Dart UI thread — so all instances share
+  /// one runtime, refcounted: created by the first [create], destroyed when
+  /// the last renderer [dispose]s. A runtime owns any number of maps.
+  static Pointer<mln_runtime> _sharedRuntime = nullptr;
+  static int _sharedRuntimeUsers = 0;
+
+  /// Live renderers keyed by their mln_map address. The shared runtime has
+  /// one event queue interleaving every map's events; whoever pumps routes
+  /// each event to its map's renderer (see [_pumpEvents]).
+  static final Map<int, FfiBasemapRenderer> _liveByMap = {};
+
+  /// This instance's reference to [_sharedRuntime] (nullptr before create /
+  /// after dispose) — doubles as the refcount-held flag.
   Pointer<mln_runtime> _runtime = nullptr;
   Pointer<mln_map> _map = nullptr;
   Pointer<mln_render_session> _session = nullptr;
@@ -181,16 +196,9 @@ class FfiBasemapRenderer implements BasemapRenderer {
     _outSession = calloc<Pointer<mln_render_session>>();
     _presenterId = presenterId;
 
-    final options = calloc<mln_runtime_options>();
-    final cachePath = ':memory:'.toNativeUtf8();
-    options.ref = _b.mln_runtime_options_default();
-    options.ref.cache_path = cachePath.cast();
-    final runtimeStatus = _b.mln_runtime_create(options, _outRuntime);
-    calloc.free(options);
-    calloc.free(cachePath); // "Copied during runtime creation."
+    final runtimeStatus = _acquireSharedRuntime();
     _diagnostics['runtimeCreateStatus'] = runtimeStatus;
     if (runtimeStatus != _statusOk) return _failCreate();
-    _runtime = _outRuntime.value;
 
     final mapOptions = calloc<mln_map_options>();
     mapOptions.ref = _b.mln_map_options_default();
@@ -203,6 +211,7 @@ class FfiBasemapRenderer implements BasemapRenderer {
     _diagnostics['mapCreateStatus'] = mapStatus;
     if (mapStatus != _statusOk) return _failCreate();
     _map = _outMap.value;
+    _liveByMap[_map.address] = this;
 
     final styleNative = styleUrl.toNativeUtf8();
     _diagnostics['setStyleStatus'] = _b.mln_map_set_style_url(
@@ -239,6 +248,25 @@ class FfiBasemapRenderer implements BasemapRenderer {
     if (attachStatus != _statusOk) return _failCreate();
     _session = _outSession.value;
     return true;
+  }
+
+  /// Points [_runtime] at the shared runtime, creating it on first use.
+  /// Returns the mln status (OK when the runtime already existed).
+  int _acquireSharedRuntime() {
+    if (_sharedRuntime == nullptr) {
+      final options = calloc<mln_runtime_options>();
+      final cachePath = ':memory:'.toNativeUtf8();
+      options.ref = _b.mln_runtime_options_default();
+      options.ref.cache_path = cachePath.cast();
+      final status = _b.mln_runtime_create(options, _outRuntime);
+      calloc.free(options);
+      calloc.free(cachePath); // "Copied during runtime creation."
+      if (status != _statusOk) return status;
+      _sharedRuntime = _outRuntime.value;
+    }
+    _sharedRuntimeUsers++;
+    _runtime = _sharedRuntime;
+    return _statusOk;
   }
 
   bool _failCreate() {
@@ -446,25 +474,34 @@ class FfiBasemapRenderer implements BasemapRenderer {
       _hasEvent.value = false;
       final status = _b.mln_runtime_poll_event(_runtime, _event, _hasEvent);
       if (status != _statusOk || !_hasEvent.value) break;
-      switch (_event.ref.type) {
-        case _eventUpdateAvailable:
-          _updateAvailable = true;
-        case _eventMapIdle:
-          _idleEvents++;
-          _idleSinceLastJump = true;
-        case _eventFrameFinished:
-          if (_event.ref.payload != nullptr &&
-              _event.ref.payload_size >=
-                  sizeOf<mln_runtime_event_render_frame>()) {
-            final frame = _event.ref.payload
-                .cast<mln_runtime_event_render_frame>()
-                .ref;
-            _needsRepaint = frame.needs_repaint;
-            _drawCalls = frame.stats.draw_call_count;
-          }
-        default:
-          break;
-      }
+      // The queue is the shared runtime's: it interleaves every live map's
+      // events, each carrying its source mln_map*. Route to that map's
+      // renderer — an unknown source is a runtime-scoped event or a map
+      // destroyed with events still queued; both drop (matching the old
+      // per-runtime switch's default).
+      _liveByMap[_event.ref.source.address]?._applyEvent(_event);
+    }
+  }
+
+  void _applyEvent(Pointer<mln_runtime_event> event) {
+    switch (event.ref.type) {
+      case _eventUpdateAvailable:
+        _updateAvailable = true;
+      case _eventMapIdle:
+        _idleEvents++;
+        _idleSinceLastJump = true;
+      case _eventFrameFinished:
+        if (event.ref.payload != nullptr &&
+            event.ref.payload_size >=
+                sizeOf<mln_runtime_event_render_frame>()) {
+          final frame = event.ref.payload
+              .cast<mln_runtime_event_render_frame>()
+              .ref;
+          _needsRepaint = frame.needs_repaint;
+          _drawCalls = frame.stats.draw_call_count;
+        }
+      default:
+        break;
     }
   }
 
@@ -516,12 +553,17 @@ class FfiBasemapRenderer implements BasemapRenderer {
       _session = nullptr;
     }
     if (_map != nullptr) {
+      _liveByMap.remove(_map.address);
       _b.mln_map_destroy(_map);
       _map = nullptr;
     }
     if (_runtime != nullptr) {
-      _b.mln_runtime_destroy(_runtime);
       _runtime = nullptr;
+      _sharedRuntimeUsers--;
+      if (_sharedRuntimeUsers == 0) {
+        _b.mln_runtime_destroy(_sharedRuntime);
+        _sharedRuntime = nullptr;
+      }
     }
     for (final pointer in <Pointer>[
       _camera,

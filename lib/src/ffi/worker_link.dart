@@ -90,7 +90,14 @@ class FfiWorkerLink implements WorkerLink {
 
   @override
   bool start(SendPort completions) {
-    _dartApiReady ??= _init(NativeApi.initializeApiDLData) == 0;
+    try {
+      _dartApiReady ??= _init(NativeApi.initializeApiDLData) == 0;
+    } on ArgumentError {
+      // fmm_dart_init is not in this binary — the worker ships on Android
+      // only. Fail soft (workerStartFailed) like any other native
+      // unavailability instead of an unhandled lookup throw.
+      _dartApiReady = false;
+    }
     if (!_dartApiReady!) return false;
     _worker = _start(completions.nativePort);
     return _worker != 0;

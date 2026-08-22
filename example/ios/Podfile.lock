@@ -15,7 +15,7 @@ EXTERNAL SOURCES:
 
 SPEC CHECKSUMS:
   Flutter: cabc95a1d2626b1b06e7179b784ebcf0c0cde467
-  flutter_map_maplibre: 8b3da02cd9c885c78f8a89b6d3e14e036689a887
+  flutter_map_maplibre: 510cc0ee1b53220d0325b305d9e8d30d4e848b78
 
 PODFILE CHECKSUM: 3c63482e143d1b91d2d2560aee9fb04ecc74ac7e
 

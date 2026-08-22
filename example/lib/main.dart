@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -31,7 +32,9 @@ class _MapPageState extends State<MapPage> with SingleTickerProviderStateMixin {
   final _mapController = MapController();
   Map<String, Object?> _diagnostics = const {};
   bool _dark = false;
-  bool _useWorker = true;
+  // The worker renderer ships on Android only; iOS stays on the
+  // synchronous ffi renderer.
+  bool _useWorker = Platform.isAndroid;
   Ticker? _ticker;
 
   /// Android display-latency compensation, in frames. Cycled live so the
@@ -172,11 +175,29 @@ class _MapPageState extends State<MapPage> with SingleTickerProviderStateMixin {
                         style: const TextStyle(fontSize: 11),
                       ),
                     ),
+                    if (Platform.isAndroid) ...[
+                      const SizedBox(height: 8),
+                      FloatingActionButton.small(
+                        heroTag: 'renderer',
+                        onPressed: () =>
+                            setState(() => _useWorker = !_useWorker),
+                        child: Text(_useWorker ? 'wkr' : 'ffi'),
+                      ),
+                    ],
                     const SizedBox(height: 8),
+                    // Multi-instance test case: push a second screen with its
+                    // own map while this one stays mounted in the nav stack —
+                    // the shape that used to blank the new map and crash
+                    // (single presenter slot per plugin). Pass: the pushed map
+                    // renders Helsinki, and popping back resumes this one.
                     FloatingActionButton.small(
-                      heroTag: 'renderer',
-                      onPressed: () => setState(() => _useWorker = !_useWorker),
-                      child: Text(_useWorker ? 'wkr' : 'ffi'),
+                      heroTag: 'push',
+                      onPressed: () => Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => const SecondMapPage(),
+                        ),
+                      ),
+                      child: const Icon(Icons.layers),
                     ),
                   ],
                 ),
@@ -206,4 +227,36 @@ class _MapPageState extends State<MapPage> with SingleTickerProviderStateMixin {
       ),
     );
   }
+}
+
+/// Second live map on top of the nav stack — the dormant-map-below scenario.
+/// Different city and style so each instance is unmistakably its own.
+class SecondMapPage extends StatelessWidget {
+  const SecondMapPage({super.key});
+
+  static const _helsinki = LatLng(60.1699, 24.9384);
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    body: Stack(
+      children: [
+        FlutterMap(
+          options: const MapOptions(initialCenter: _helsinki, initialZoom: 12),
+          children: const [
+            MapLibreBasemap(styleUrl: _darkStyle, overRenderFactor: 1.1),
+          ],
+        ),
+        SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: FloatingActionButton.small(
+              heroTag: 'pop',
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Icon(Icons.arrow_back),
+            ),
+          ),
+        ),
+      ],
+    ),
+  );
 }
