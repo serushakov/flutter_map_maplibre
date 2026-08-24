@@ -8,6 +8,7 @@ export 'src/maplibre_basemap.dart';
 export 'src/offline/ffi_offline_link.dart';
 export 'src/offline/maplibre_offline.dart';
 export 'src/offline/offline_link.dart';
+export 'src/offline/worker_offline_link.dart';
 export 'src/offline/offline_types.dart';
 export 'src/offline/tile_count.dart';
 export 'src/residual_transform.dart';

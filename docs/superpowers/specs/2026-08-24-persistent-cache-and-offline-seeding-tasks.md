@@ -85,21 +85,24 @@ Order is dependency-driven; tasks within a phase are mostly parallelizable.
 
 ## Phase 3 — Android offline worker
 
-- [ ] **3.1** `fmm_worker.cpp` offline mode: worker constructed without
-      map/session; commands `kOfflineCreate`, `kOfflineRegionCreate`,
-      `kOfflineSetDownloadState`, `kOfflineRegionsList`,
-      `kOfflineRegionDelete`, `kOfflineRegionGetStatus`, `kOfflineAmbientOp`
-      (reset/pack/clear only — never INVALIDATE, check 0.2), `kOfflinePump`;
-      plus `kClearData` on the *render* worker (purge nudge, check 0.1);
-      completions `kOfflineOpCompleted`,
-      `kOfflineRegionStatus`, `kOfflineRegionError`. Snapshot/list handles
-      consumed worker-side; only plain values cross the port.
-- [ ] **3.2** Dart `FfiOfflineLink` for the worker path; facade picks the
-      link by platform. NDK build + bindings for the new `fmm_worker_*`
-      entry points.
-- [ ] **3.3** Emulator smoke: facade-driven seed on the worker runtime while
-      a map renders on another worker (two runtimes, one DB — already
-      probe-proven at the raw layer), offline cold start.
+- [x] **3.1** `OfflineWorker` in `fmm_worker.cpp`: dedicated map-less owner
+      thread + own runtime; commands create/regionCreate/setObserved/
+      setDownloadState/list/delete/getStatus/ambient (reset/pack/clear
+      only)/pump/destroy via `fmm_offline_*` entry points; typed
+      completions (kinds 100–108, incl. strings + metadata bytes over the
+      port); worker-side pending-op table, snapshot/list handles consumed
+      worker-side; self-pumps at 50ms while ops are in flight so acks
+      don't wait on Dart's slow timer. (`kClearData` on the render worker
+      moved to phase 4 with the purge nudge.)
+- [x] **3.2** `WorkerOfflineLink` (`lib/src/offline/worker_offline_link.dart`)
+      decodes the port messages back into `OfflineEvent`s; facade picks
+      `WorkerOfflineLink` on Android, `FfiOfflineLink` elsewhere. Same
+      facade state machine, zero Android-specific logic above the link.
+- [x] **3.3** Emulator smoke (2026-08-24, Pixel 6 API 33): facade-driven
+      pair seed on the offline worker while a map rendered on a render
+      worker (two runtimes, one DB) — identical results to iOS (40/40
+      tiles, 572/572 resources, one grouped region); cold start with
+      wifi+data disabled renders Tallinn from the seed, ticker parks.
 
 ## Phase 4 — cache key (purge-only)
 

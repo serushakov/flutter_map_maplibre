@@ -4,6 +4,7 @@
 // (strict FIFO, RENDER coalescing only) and receives completions over a
 // NativePort. See docs/superpowers/specs/2026-07-26-render-worker-thread-design.md.
 
+#include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <cstring>
@@ -12,6 +13,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 #include <EGL/egl.h>
@@ -328,6 +330,557 @@ class Worker {
 
 Worker* AsWorker(int64_t handle) { return reinterpret_cast<Worker*>(handle); }
 
+// ---------------------------------------------------------------------------
+// Offline worker — a second, map-less owner thread for the offline seeding
+// facade (spec 2026-08-24). Own thread → own mln runtime is legal on
+// Android; it shares the SQLite database file with the render workers'
+// runtimes (probe-validated). Commands mirror Dart's OfflineLink; every
+// native handle (op results, snapshots, lists) is consumed on this thread
+// and only plain values cross the port.
+
+// Completion kinds on the offline worker's port. Mirrored in
+// worker_offline_link.dart; keep in sync.
+constexpr int64_t kOfflineCreated = 100;       // [kind, runtime_status]
+constexpr int64_t kOfflineRegionCreated = 101; // [kind, req, status, region]
+constexpr int64_t kOfflineAck = 102;           // [kind, req, status]
+constexpr int64_t kOfflineList = 103;   // [kind, req, status, n, n×11 items]
+constexpr int64_t kOfflineStatus = 104; // [kind, req(0=push), region, 8×counters]
+constexpr int64_t kOfflineDeleted = 105;     // [kind, req, status]
+constexpr int64_t kOfflineAmbientDone = 106; // [kind, req, status]
+constexpr int64_t kOfflineRegionError = 107; // [kind, region, fatal, message]
+constexpr int64_t kOfflineDestroyed = 108;   // [kind]
+
+// Local failure code for "commands against a runtime that never came up",
+// outside mln_status's range (matching kErrNoSession's convention).
+constexpr int32_t kErrNoRuntime = -101;
+
+// A value in an offline completion message: int64, double, string or bytes.
+struct OVal {
+  enum Kind { kInt, kDouble, kString, kBytes } kind = kInt;
+  int64_t i = 0;
+  double d = 0;
+  std::string s;
+  std::vector<uint8_t> bytes;
+};
+OVal OI(int64_t v) {
+  OVal val;
+  val.kind = OVal::kInt;
+  val.i = v;
+  return val;
+}
+OVal OD(double v) {
+  OVal val;
+  val.kind = OVal::kDouble;
+  val.d = v;
+  return val;
+}
+OVal OS(std::string v) {
+  OVal val;
+  val.kind = OVal::kString;
+  val.s = std::move(v);
+  return val;
+}
+OVal OB(std::vector<uint8_t> v) {
+  OVal val;
+  val.kind = OVal::kBytes;
+  val.bytes = std::move(v);
+  return val;
+}
+
+enum class OCmd {
+  kCreate,
+  kRegionCreate,
+  kSetObserved,
+  kSetDownloadState,
+  kList,
+  kDelete,
+  kGetStatus,
+  kAmbient,
+  kPump,
+  kDestroy,
+};
+
+struct OfflineCommand {
+  OCmd type;
+  int64_t request_id = 0;
+  int64_t region_id = 0;
+  std::string cache_path;
+  uint64_t max_cache_size = 0;
+  std::string style_url;
+  double south = 0, west = 0, north = 0, east = 0;
+  double min_zoom = 0, max_zoom = 0, pixel_ratio = 1.0;
+  bool flag = false;  // observed / download-active / include_ideographs
+  uint32_t ambient_op = 0;
+  std::vector<uint8_t> metadata;
+};
+
+class OfflineWorker {
+ public:
+  explicit OfflineWorker(Dart_Port port) : port_(port) {
+    std::thread([this] { Run(); }).detach();
+  }
+
+  void Post(OfflineCommand cmd) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    queue_.push_back(std::move(cmd));
+    cv_.notify_one();
+  }
+
+ private:
+  void Run() {
+    for (;;) {
+      OfflineCommand cmd;
+      {
+        std::unique_lock<std::mutex> lock(mutex_);
+        if (pending_.empty()) {
+          cv_.wait(lock, [this] { return !queue_.empty(); });
+        } else {
+          // Operations are in flight: self-pump on a short cadence so
+          // completions post promptly instead of waiting for the Dart
+          // side's slow timer.
+          const bool got = cv_.wait_for(lock, std::chrono::milliseconds(50),
+                                        [this] { return !queue_.empty(); });
+          if (!got) {
+            lock.unlock();
+            Pump();
+            continue;
+          }
+        }
+        cmd = std::move(queue_.front());
+        queue_.pop_front();
+      }
+      switch (cmd.type) {
+        case OCmd::kCreate:
+          Create(cmd);
+          break;
+        case OCmd::kRegionCreate:
+          RegionCreate(cmd);
+          break;
+        case OCmd::kSetObserved:
+          SetObserved(cmd);
+          break;
+        case OCmd::kSetDownloadState:
+          SetDownloadState(cmd);
+          break;
+        case OCmd::kList:
+          List(cmd);
+          break;
+        case OCmd::kDelete:
+          Delete(cmd);
+          break;
+        case OCmd::kGetStatus:
+          GetStatus(cmd);
+          break;
+        case OCmd::kAmbient:
+          Ambient(cmd);
+          break;
+        case OCmd::kPump:
+          Pump();
+          break;
+        case OCmd::kDestroy:
+          Destroy();
+          PostMessage({OI(kOfflineDestroyed)});
+          delete this;
+          return;
+      }
+    }
+  }
+
+  struct PendingOp {
+    OCmd kind;
+    int64_t request_id;
+    int64_t region_id;
+  };
+
+  void Create(const OfflineCommand& cmd) {
+    mln_runtime_options options = mln_runtime_options_default();
+    options.cache_path = cmd.cache_path.c_str();
+    if (cmd.max_cache_size > 0) {
+      options.flags |= MLN_RUNTIME_OPTION_MAXIMUM_CACHE_SIZE;
+      options.maximum_cache_size = cmd.max_cache_size;
+    }
+    const int32_t status = mln_runtime_create(&options, &runtime_);
+    PostMessage({OI(kOfflineCreated), OI(status)});
+  }
+
+  // Starts an async op; on start failure posts the terminal completion for
+  // [kind] immediately, else records it for HandleOpCompleted.
+  void Track(int32_t start_status, uint64_t op_id, OCmd kind,
+             int64_t request_id, int64_t region_id) {
+    if (start_status != kStatusOk) {
+      PostTerminal(kind, request_id, region_id, start_status, 0);
+      return;
+    }
+    pending_[op_id] = PendingOp{kind, request_id, region_id};
+  }
+
+  // The one completion each command kind promises, for failure paths and
+  // ack-style successes.
+  void PostTerminal(OCmd kind, int64_t request_id, int64_t region_id,
+                    int32_t status, int64_t created_region_id) {
+    switch (kind) {
+      case OCmd::kRegionCreate:
+        PostMessage({OI(kOfflineRegionCreated), OI(request_id), OI(status),
+                     OI(created_region_id)});
+        break;
+      case OCmd::kSetObserved:
+      case OCmd::kSetDownloadState:
+        PostMessage({OI(kOfflineAck), OI(request_id), OI(status)});
+        break;
+      case OCmd::kList:
+        PostMessage(
+            {OI(kOfflineList), OI(request_id), OI(status), OI(0)});
+        break;
+      case OCmd::kDelete:
+        PostMessage({OI(kOfflineDeleted), OI(request_id), OI(status)});
+        break;
+      case OCmd::kGetStatus:
+        // Failure only; success posts a full kOfflineStatus.
+        PostMessage({OI(kOfflineAck), OI(request_id), OI(status)});
+        break;
+      case OCmd::kAmbient:
+        PostMessage({OI(kOfflineAmbientDone), OI(request_id), OI(status)});
+        break;
+      default:
+        break;
+    }
+  }
+
+  void RegionCreate(const OfflineCommand& cmd) {
+    if (runtime_ == nullptr) {
+      PostTerminal(OCmd::kRegionCreate, cmd.request_id, 0, kErrNoRuntime, 0);
+      return;
+    }
+    mln_offline_region_definition def;
+    std::memset(&def, 0, sizeof def);
+    def.size = sizeof def;
+    def.type = MLN_OFFLINE_REGION_DEFINITION_TILE_PYRAMID;
+    mln_offline_tile_pyramid_region_definition& tp = def.data.tile_pyramid;
+    tp.size = sizeof tp;
+    tp.style_url = cmd.style_url.c_str();
+    tp.bounds.southwest.latitude = cmd.south;
+    tp.bounds.southwest.longitude = cmd.west;
+    tp.bounds.northeast.latitude = cmd.north;
+    tp.bounds.northeast.longitude = cmd.east;
+    tp.min_zoom = cmd.min_zoom;
+    tp.max_zoom = cmd.max_zoom;
+    tp.pixel_ratio = static_cast<float>(cmd.pixel_ratio);
+    tp.include_ideographs = cmd.flag;
+    uint64_t op_id = 0;
+    const int32_t status = mln_runtime_offline_region_create_start(
+        runtime_, &def, cmd.metadata.empty() ? nullptr : cmd.metadata.data(),
+        cmd.metadata.size(), &op_id);
+    Track(status, op_id, OCmd::kRegionCreate, cmd.request_id, 0);
+  }
+
+  void SetObserved(const OfflineCommand& cmd) {
+    if (runtime_ == nullptr) {
+      PostTerminal(OCmd::kSetObserved, cmd.request_id, 0, kErrNoRuntime, 0);
+      return;
+    }
+    uint64_t op_id = 0;
+    const int32_t status = mln_runtime_offline_region_set_observed_start(
+        runtime_, cmd.region_id, cmd.flag, &op_id);
+    Track(status, op_id, OCmd::kSetObserved, cmd.request_id, cmd.region_id);
+  }
+
+  void SetDownloadState(const OfflineCommand& cmd) {
+    if (runtime_ == nullptr) {
+      PostTerminal(OCmd::kSetDownloadState, cmd.request_id, 0, kErrNoRuntime,
+                   0);
+      return;
+    }
+    uint64_t op_id = 0;
+    const int32_t status = mln_runtime_offline_region_set_download_state_start(
+        runtime_, cmd.region_id,
+        cmd.flag ? MLN_OFFLINE_REGION_DOWNLOAD_ACTIVE
+                 : MLN_OFFLINE_REGION_DOWNLOAD_INACTIVE,
+        &op_id);
+    Track(status, op_id, OCmd::kSetDownloadState, cmd.request_id,
+          cmd.region_id);
+  }
+
+  void List(const OfflineCommand& cmd) {
+    if (runtime_ == nullptr) {
+      PostTerminal(OCmd::kList, cmd.request_id, 0, kErrNoRuntime, 0);
+      return;
+    }
+    uint64_t op_id = 0;
+    const int32_t status =
+        mln_runtime_offline_regions_list_start(runtime_, &op_id);
+    Track(status, op_id, OCmd::kList, cmd.request_id, 0);
+  }
+
+  void Delete(const OfflineCommand& cmd) {
+    if (runtime_ == nullptr) {
+      PostTerminal(OCmd::kDelete, cmd.request_id, 0, kErrNoRuntime, 0);
+      return;
+    }
+    uint64_t op_id = 0;
+    const int32_t status = mln_runtime_offline_region_delete_start(
+        runtime_, cmd.region_id, &op_id);
+    Track(status, op_id, OCmd::kDelete, cmd.request_id, cmd.region_id);
+  }
+
+  void GetStatus(const OfflineCommand& cmd) {
+    if (runtime_ == nullptr) {
+      PostTerminal(OCmd::kGetStatus, cmd.request_id, 0, kErrNoRuntime, 0);
+      return;
+    }
+    uint64_t op_id = 0;
+    const int32_t status = mln_runtime_offline_region_get_status_start(
+        runtime_, cmd.region_id, &op_id);
+    Track(status, op_id, OCmd::kGetStatus, cmd.request_id, cmd.region_id);
+  }
+
+  void Ambient(const OfflineCommand& cmd) {
+    if (runtime_ == nullptr) {
+      PostTerminal(OCmd::kAmbient, cmd.request_id, 0, kErrNoRuntime, 0);
+      return;
+    }
+    uint64_t op_id = 0;
+    const int32_t status = mln_runtime_run_ambient_cache_operation_start(
+        runtime_, cmd.ambient_op, &op_id);
+    Track(status, op_id, OCmd::kAmbient, cmd.request_id, 0);
+  }
+
+  void Pump() {
+    if (runtime_ == nullptr) return;
+    mln_runtime_run_once(runtime_);
+    for (;;) {
+      mln_runtime_event event;
+      std::memset(&event, 0, sizeof event);
+      event.size = sizeof event;
+      bool has = false;
+      if (mln_runtime_poll_event(runtime_, &event, &has) != kStatusOk ||
+          !has) {
+        break;
+      }
+      HandleEvent(event);
+    }
+  }
+
+  void HandleEvent(const mln_runtime_event& event) {
+    switch (event.type) {
+      case MLN_RUNTIME_EVENT_OFFLINE_OPERATION_COMPLETED: {
+        if (event.payload == nullptr) break;
+        const auto* done = reinterpret_cast<
+            const mln_runtime_event_offline_operation_completed*>(
+            event.payload);
+        HandleOpCompleted(done->operation_id, done->result_status);
+        break;
+      }
+      case MLN_RUNTIME_EVENT_OFFLINE_REGION_STATUS_CHANGED: {
+        if (event.payload == nullptr) break;
+        const auto* payload =
+            reinterpret_cast<const mln_runtime_event_offline_region_status*>(
+                event.payload);
+        PostStatus(0, payload->region_id, payload->status);
+        break;
+      }
+      case MLN_RUNTIME_EVENT_OFFLINE_REGION_RESPONSE_ERROR: {
+        if (event.payload == nullptr) break;
+        const auto* payload = reinterpret_cast<
+            const mln_runtime_event_offline_region_response_error*>(
+            event.payload);
+        PostMessage({OI(kOfflineRegionError), OI(payload->region_id), OI(0),
+                     OS("resource response error (reason " +
+                        std::to_string(payload->reason) + ")")});
+        break;
+      }
+      case MLN_RUNTIME_EVENT_OFFLINE_REGION_TILE_COUNT_LIMIT_EXCEEDED: {
+        if (event.payload == nullptr) break;
+        const auto* payload = reinterpret_cast<
+            const mln_runtime_event_offline_region_tile_count_limit*>(
+            event.payload);
+        PostMessage({OI(kOfflineRegionError), OI(payload->region_id), OI(1),
+                     OS("tile count limit " + std::to_string(payload->limit) +
+                        " reached")});
+        break;
+      }
+      default:
+        break;
+    }
+  }
+
+  void HandleOpCompleted(uint64_t op_id, int32_t result_status) {
+    const auto found = pending_.find(op_id);
+    if (found == pending_.end()) return;
+    const PendingOp op = found->second;
+    pending_.erase(found);
+    if (result_status != kStatusOk) {
+      PostTerminal(op.kind, op.request_id, op.region_id, result_status, 0);
+      return;
+    }
+    switch (op.kind) {
+      case OCmd::kRegionCreate:
+        TakeCreatedRegion(op_id, op.request_id);
+        break;
+      case OCmd::kList:
+        TakeRegionList(op_id, op.request_id);
+        break;
+      case OCmd::kGetStatus: {
+        mln_offline_region_status status;
+        std::memset(&status, 0, sizeof status);
+        status.size = sizeof status;
+        const int32_t take = mln_runtime_offline_region_get_status_take_result(
+            runtime_, op_id, &status);
+        if (take != kStatusOk) {
+          PostTerminal(op.kind, op.request_id, op.region_id, take, 0);
+        } else {
+          PostStatus(op.request_id, op.region_id, status);
+        }
+        break;
+      }
+      default:
+        PostTerminal(op.kind, op.request_id, op.region_id, kStatusOk, 0);
+        break;
+    }
+  }
+
+  void TakeCreatedRegion(uint64_t op_id, int64_t request_id) {
+    mln_offline_region_snapshot* snapshot = nullptr;
+    int32_t status = mln_runtime_offline_region_create_take_result(
+        runtime_, op_id, &snapshot);
+    int64_t region_id = 0;
+    if (status == kStatusOk) {
+      mln_offline_region_info info;
+      std::memset(&info, 0, sizeof info);
+      info.size = sizeof info;
+      status = mln_offline_region_snapshot_get(snapshot, &info);
+      if (status == kStatusOk) region_id = info.id;
+      mln_offline_region_snapshot_destroy(snapshot);
+    }
+    PostMessage({OI(kOfflineRegionCreated), OI(request_id), OI(status),
+                 OI(region_id)});
+  }
+
+  void TakeRegionList(uint64_t op_id, int64_t request_id) {
+    mln_offline_region_list* list = nullptr;
+    int32_t status =
+        mln_runtime_offline_regions_list_take_result(runtime_, op_id, &list);
+    std::vector<OVal> message = {OI(kOfflineList), OI(request_id)};
+    std::vector<OVal> items;
+    size_t count = 0;
+    if (status == kStatusOk) {
+      status = mln_offline_region_list_count(list, &count);
+      for (size_t i = 0; i < count && status == kStatusOk; i++) {
+        mln_offline_region_info info;
+        std::memset(&info, 0, sizeof info);
+        info.size = sizeof info;
+        status = mln_offline_region_list_get(list, i, &info);
+        if (status != kStatusOk) break;
+        if (info.definition.type != MLN_OFFLINE_REGION_DEFINITION_TILE_PYRAMID) {
+          continue;  // this package never creates geometry regions
+        }
+        const mln_offline_tile_pyramid_region_definition& tp =
+            info.definition.data.tile_pyramid;
+        items.push_back(OI(info.id));
+        items.push_back(OS(tp.style_url == nullptr ? "" : tp.style_url));
+        items.push_back(OD(tp.bounds.southwest.latitude));
+        items.push_back(OD(tp.bounds.southwest.longitude));
+        items.push_back(OD(tp.bounds.northeast.latitude));
+        items.push_back(OD(tp.bounds.northeast.longitude));
+        items.push_back(OD(tp.min_zoom));
+        items.push_back(OD(tp.max_zoom));
+        items.push_back(OD(tp.pixel_ratio));
+        items.push_back(OI(tp.include_ideographs ? 1 : 0));
+        std::vector<uint8_t> metadata;
+        if (info.metadata != nullptr && info.metadata_size > 0) {
+          metadata.assign(info.metadata, info.metadata + info.metadata_size);
+        }
+        items.push_back(OB(std::move(metadata)));
+      }
+      mln_offline_region_list_destroy(list);
+    }
+    message.push_back(OI(status));
+    message.push_back(OI(static_cast<int64_t>(items.size() / 11)));
+    for (OVal& item : items) message.push_back(std::move(item));
+    PostVector(message);
+  }
+
+  void PostStatus(int64_t request_id, int64_t region_id,
+                  const mln_offline_region_status& status) {
+    PostMessage({OI(kOfflineStatus), OI(request_id), OI(region_id),
+                 OI(status.download_state),
+                 OI(static_cast<int64_t>(status.completed_resource_count)),
+                 OI(static_cast<int64_t>(status.completed_resource_size)),
+                 OI(static_cast<int64_t>(status.completed_tile_count)),
+                 OI(static_cast<int64_t>(status.required_tile_count)),
+                 OI(static_cast<int64_t>(status.required_resource_count)),
+                 OI(status.required_resource_count_is_precise ? 1 : 0),
+                 OI(status.complete ? 1 : 0)});
+  }
+
+  void Destroy() {
+    if (runtime_ != nullptr) {
+      for (const auto& entry : pending_) {
+        mln_runtime_offline_operation_discard(runtime_, entry.first);
+      }
+      pending_.clear();
+      mln_runtime_destroy(runtime_);
+      runtime_ = nullptr;
+    }
+  }
+
+  void PostMessage(std::initializer_list<OVal> values) {
+    std::vector<OVal> vector(values.size());
+    size_t i = 0;
+    for (const OVal& v : values) vector[i++] = v;
+    PostVector(vector);
+  }
+
+  void PostVector(std::vector<OVal>& values) {
+    std::vector<Dart_CObject> items(values.size());
+    std::vector<Dart_CObject*> pointers(values.size());
+    for (size_t i = 0; i < values.size(); i++) {
+      OVal& v = values[i];
+      switch (v.kind) {
+        case OVal::kInt:
+          items[i].type = Dart_CObject_kInt64;
+          items[i].value.as_int64 = v.i;
+          break;
+        case OVal::kDouble:
+          items[i].type = Dart_CObject_kDouble;
+          items[i].value.as_double = v.d;
+          break;
+        case OVal::kString:
+          items[i].type = Dart_CObject_kString;
+          items[i].value.as_string = const_cast<char*>(v.s.c_str());
+          break;
+        case OVal::kBytes:
+          items[i].type = Dart_CObject_kTypedData;
+          items[i].value.as_typed_data.type = Dart_TypedData_kUint8;
+          items[i].value.as_typed_data.length =
+              static_cast<intptr_t>(v.bytes.size());
+          items[i].value.as_typed_data.values =
+              v.bytes.empty() ? nullptr : v.bytes.data();
+          break;
+      }
+      pointers[i] = &items[i];
+    }
+    Dart_CObject message;
+    message.type = Dart_CObject_kArray;
+    message.value.as_array.length = static_cast<intptr_t>(items.size());
+    message.value.as_array.values = pointers.data();
+    Dart_PostCObject_DL(port_, &message);
+  }
+
+  const Dart_Port port_;
+  std::mutex mutex_;
+  std::condition_variable cv_;
+  std::deque<OfflineCommand> queue_;
+
+  // Owner-thread state: touched only on the worker thread after
+  // construction.
+  mln_runtime* runtime_ = nullptr;
+  std::unordered_map<uint64_t, PendingOp> pending_;
+};
+
+OfflineWorker* AsOfflineWorker(int64_t handle) {
+  return reinterpret_cast<OfflineWorker*>(handle);
+}
+
 }  // namespace
 
 extern "C" {
@@ -397,6 +950,118 @@ __attribute__((visibility("default"))) void fmm_worker_post_destroy(
   Command cmd;
   cmd.type = CmdType::kDestroy;
   AsWorker(worker)->Post(std::move(cmd));
+}
+
+// --- offline worker ---------------------------------------------------------
+// All pointer arguments are copied on the calling thread; the caller frees
+// them after the call returns.
+
+__attribute__((visibility("default"))) int64_t fmm_offline_start(
+    int64_t port) {
+  return reinterpret_cast<int64_t>(
+      new OfflineWorker(static_cast<Dart_Port>(port)));
+}
+
+__attribute__((visibility("default"))) void fmm_offline_post_create(
+    int64_t worker, const char* cache_path, uint64_t max_cache_size) {
+  OfflineCommand cmd;
+  cmd.type = OCmd::kCreate;
+  cmd.cache_path = cache_path;
+  cmd.max_cache_size = max_cache_size;
+  AsOfflineWorker(worker)->Post(std::move(cmd));
+}
+
+__attribute__((visibility("default"))) void fmm_offline_post_region_create(
+    int64_t worker, int64_t request_id, const char* style_url, double south,
+    double west, double north, double east, double min_zoom, double max_zoom,
+    double pixel_ratio, int32_t include_ideographs, const uint8_t* metadata,
+    intptr_t metadata_size) {
+  OfflineCommand cmd;
+  cmd.type = OCmd::kRegionCreate;
+  cmd.request_id = request_id;
+  cmd.style_url = style_url;
+  cmd.south = south;
+  cmd.west = west;
+  cmd.north = north;
+  cmd.east = east;
+  cmd.min_zoom = min_zoom;
+  cmd.max_zoom = max_zoom;
+  cmd.pixel_ratio = pixel_ratio;
+  cmd.flag = include_ideographs != 0;
+  if (metadata != nullptr && metadata_size > 0) {
+    cmd.metadata.assign(metadata, metadata + metadata_size);
+  }
+  AsOfflineWorker(worker)->Post(std::move(cmd));
+}
+
+__attribute__((visibility("default"))) void fmm_offline_post_set_observed(
+    int64_t worker, int64_t request_id, int64_t region_id, int32_t observed) {
+  OfflineCommand cmd;
+  cmd.type = OCmd::kSetObserved;
+  cmd.request_id = request_id;
+  cmd.region_id = region_id;
+  cmd.flag = observed != 0;
+  AsOfflineWorker(worker)->Post(std::move(cmd));
+}
+
+__attribute__((visibility("default"))) void
+fmm_offline_post_set_download_state(int64_t worker, int64_t request_id,
+                                    int64_t region_id, int32_t active) {
+  OfflineCommand cmd;
+  cmd.type = OCmd::kSetDownloadState;
+  cmd.request_id = request_id;
+  cmd.region_id = region_id;
+  cmd.flag = active != 0;
+  AsOfflineWorker(worker)->Post(std::move(cmd));
+}
+
+__attribute__((visibility("default"))) void fmm_offline_post_list(
+    int64_t worker, int64_t request_id) {
+  OfflineCommand cmd;
+  cmd.type = OCmd::kList;
+  cmd.request_id = request_id;
+  AsOfflineWorker(worker)->Post(std::move(cmd));
+}
+
+__attribute__((visibility("default"))) void fmm_offline_post_delete(
+    int64_t worker, int64_t request_id, int64_t region_id) {
+  OfflineCommand cmd;
+  cmd.type = OCmd::kDelete;
+  cmd.request_id = request_id;
+  cmd.region_id = region_id;
+  AsOfflineWorker(worker)->Post(std::move(cmd));
+}
+
+__attribute__((visibility("default"))) void fmm_offline_post_get_status(
+    int64_t worker, int64_t request_id, int64_t region_id) {
+  OfflineCommand cmd;
+  cmd.type = OCmd::kGetStatus;
+  cmd.request_id = request_id;
+  cmd.region_id = region_id;
+  AsOfflineWorker(worker)->Post(std::move(cmd));
+}
+
+__attribute__((visibility("default"))) void fmm_offline_post_ambient(
+    int64_t worker, int64_t request_id, uint32_t operation) {
+  OfflineCommand cmd;
+  cmd.type = OCmd::kAmbient;
+  cmd.request_id = request_id;
+  cmd.ambient_op = operation;
+  AsOfflineWorker(worker)->Post(std::move(cmd));
+}
+
+__attribute__((visibility("default"))) void fmm_offline_post_pump(
+    int64_t worker) {
+  OfflineCommand cmd;
+  cmd.type = OCmd::kPump;
+  AsOfflineWorker(worker)->Post(std::move(cmd));
+}
+
+__attribute__((visibility("default"))) void fmm_offline_post_destroy(
+    int64_t worker) {
+  OfflineCommand cmd;
+  cmd.type = OCmd::kDestroy;
+  AsOfflineWorker(worker)->Post(std::move(cmd));
 }
 
 }  // extern "C"

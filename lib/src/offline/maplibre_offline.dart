@@ -9,6 +9,7 @@ import 'ffi_offline_link.dart';
 import 'offline_link.dart';
 import 'offline_types.dart';
 import 'tile_count.dart' as tile_math;
+import 'worker_offline_link.dart';
 
 /// Offline seeding facade
 /// (docs/superpowers/specs/2026-08-24-persistent-cache-and-offline-seeding.md).
@@ -310,15 +311,11 @@ class MaplibreOffline {
     return link;
   }
 
-  static OfflineLink _defaultLink() {
-    if (Platform.isAndroid) {
-      // Android offline runs on a dedicated worker (spec: Android worker
-      // protocol changes); until that lands the shared-runtime link would
-      // collide with the render workers' own runtimes.
-      throw UnsupportedError('offline seeding on Android is not wired up yet');
-    }
-    return FfiOfflineLink();
-  }
+  static OfflineLink _defaultLink() =>
+      // Android: a dedicated map-less worker thread owns the offline
+      // runtime (one runtime per thread; the render workers own theirs).
+      // Elsewhere the offline ops share the renderers' UI-thread runtime.
+      Platform.isAndroid ? WorkerOfflineLink() : FfiOfflineLink();
 
   static void _onEvent(OfflineEvent event) {
     if (debugLogEvents) {
