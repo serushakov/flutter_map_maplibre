@@ -64,6 +64,8 @@ struct Command {
   double scale = 1.0;
   int64_t presenter_id = 0;
   std::string url;  // kCreate style URL / kSetStyle
+  std::string cache_path;         // kCreate; ":memory:" when unconfigured
+  uint64_t max_cache_size = 0;    // kCreate; 0 keeps MapLibre's default
   double lat = 0, lng = 0, zoom = 0, bearing = 0;
   int64_t gen = 0;  // kJump / kRender
 };
@@ -141,7 +143,11 @@ class Worker {
 
   void Create(const Command& cmd) {
     mln_runtime_options options = mln_runtime_options_default();
-    options.cache_path = ":memory:";
+    options.cache_path = cmd.cache_path.c_str();
+    if (cmd.max_cache_size > 0) {
+      options.flags |= MLN_RUNTIME_OPTION_MAXIMUM_CACHE_SIZE;
+      options.maximum_cache_size = cmd.max_cache_size;
+    }
     int32_t runtime_status = mln_runtime_create(&options, &runtime_);
     // -1000 marks "stage not attempted" — kept well outside mln_status's
     // 0..-5 range (unlike -1, which collides with
@@ -336,7 +342,8 @@ __attribute__((visibility("default"))) int64_t fmm_worker_start(int64_t port) {
 
 __attribute__((visibility("default"))) void fmm_worker_post_create(
     int64_t worker, int32_t width, int32_t height, double scale,
-    const char* style_url, int64_t presenter_id) {
+    const char* style_url, int64_t presenter_id, const char* cache_path,
+    uint64_t max_cache_size) {
   Command cmd;
   cmd.type = CmdType::kCreate;
   cmd.width = width;
@@ -344,6 +351,8 @@ __attribute__((visibility("default"))) void fmm_worker_post_create(
   cmd.scale = scale;
   cmd.url = style_url;  // copied on the calling thread; caller frees after
   cmd.presenter_id = presenter_id;
+  cmd.cache_path = cache_path;  // same copy-on-this-thread contract
+  cmd.max_cache_size = max_cache_size;
   AsWorker(worker)->Post(std::move(cmd));
 }
 

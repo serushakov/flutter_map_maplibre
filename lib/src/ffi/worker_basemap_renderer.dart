@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_map/flutter_map.dart';
 
 import '../basemap_renderer.dart';
+import '../cache_config.dart';
 import '../camera_conventions.dart';
 import 'worker_link.dart';
 
@@ -158,7 +159,10 @@ class WorkerBasemapRenderer implements BasemapRenderer {
       scale: scale,
       styleUrl: styleUrl,
       presenterId: presenterId,
+      cachePath: MaplibreCache.databasePath,
+      maxCacheBytes: MaplibreCache.maxAmbientBytes ?? 0,
     );
+    MaplibreCache.markRuntimeCreated();
     return completer.future;
   }
 

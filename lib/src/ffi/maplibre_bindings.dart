@@ -43,6 +43,28 @@ class MaplibreBindings {
   late final _mln_supported_render_backend_mask =
       _mln_supported_render_backend_maskPtr.asFunction<int Function()>();
 
+  int mln_network_status_get(ffi.Pointer<ffi.Uint32> out_status) {
+    return _mln_network_status_get(out_status);
+  }
+
+  late final _mln_network_status_getPtr =
+      _lookup<ffi.NativeFunction<ffi.Int32 Function(ffi.Pointer<ffi.Uint32>)>>(
+        'mln_network_status_get',
+      );
+  late final _mln_network_status_get = _mln_network_status_getPtr
+      .asFunction<int Function(ffi.Pointer<ffi.Uint32>)>();
+
+  int mln_network_status_set(int status) {
+    return _mln_network_status_set(status);
+  }
+
+  late final _mln_network_status_setPtr =
+      _lookup<ffi.NativeFunction<ffi.Int32 Function(ffi.Uint32)>>(
+        'mln_network_status_set',
+      );
+  late final _mln_network_status_set = _mln_network_status_setPtr
+      .asFunction<int Function(int)>();
+
   mln_runtime_options mln_runtime_options_default() {
     return _mln_runtime_options_default();
   }
@@ -77,6 +99,55 @@ class MaplibreBindings {
           ffi.Pointer<ffi.Pointer<mln_runtime>>,
         )
       >();
+
+  int mln_runtime_run_ambient_cache_operation_start(
+    ffi.Pointer<mln_runtime> runtime,
+    int operation,
+    ffi.Pointer<mln_offline_operation_id> out_operation_id,
+  ) {
+    return _mln_runtime_run_ambient_cache_operation_start(
+      runtime,
+      operation,
+      out_operation_id,
+    );
+  }
+
+  late final _mln_runtime_run_ambient_cache_operation_startPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(
+            ffi.Pointer<mln_runtime>,
+            ffi.Uint32,
+            ffi.Pointer<mln_offline_operation_id>,
+          )
+        >
+      >('mln_runtime_run_ambient_cache_operation_start');
+  late final _mln_runtime_run_ambient_cache_operation_start =
+      _mln_runtime_run_ambient_cache_operation_startPtr
+          .asFunction<
+            int Function(
+              ffi.Pointer<mln_runtime>,
+              int,
+              ffi.Pointer<mln_offline_operation_id>,
+            )
+          >();
+
+  int mln_runtime_offline_operation_discard(
+    ffi.Pointer<mln_runtime> runtime,
+    int operation_id,
+  ) {
+    return _mln_runtime_offline_operation_discard(runtime, operation_id);
+  }
+
+  late final _mln_runtime_offline_operation_discardPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(ffi.Pointer<mln_runtime>, mln_offline_operation_id)
+        >
+      >('mln_runtime_offline_operation_discard');
+  late final _mln_runtime_offline_operation_discard =
+      _mln_runtime_offline_operation_discardPtr
+          .asFunction<int Function(ffi.Pointer<mln_runtime>, int)>();
 
   int mln_runtime_destroy(ffi.Pointer<mln_runtime> runtime) {
     return _mln_runtime_destroy(runtime);
@@ -126,6 +197,585 @@ class MaplibreBindings {
           ffi.Pointer<ffi.Bool>,
         )
       >();
+
+  int mln_runtime_offline_region_create_start(
+    ffi.Pointer<mln_runtime> runtime,
+    ffi.Pointer<mln_offline_region_definition> definition,
+    ffi.Pointer<ffi.Uint8> metadata,
+    int metadata_size,
+    ffi.Pointer<mln_offline_operation_id> out_operation_id,
+  ) {
+    return _mln_runtime_offline_region_create_start(
+      runtime,
+      definition,
+      metadata,
+      metadata_size,
+      out_operation_id,
+    );
+  }
+
+  late final _mln_runtime_offline_region_create_startPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(
+            ffi.Pointer<mln_runtime>,
+            ffi.Pointer<mln_offline_region_definition>,
+            ffi.Pointer<ffi.Uint8>,
+            ffi.Size,
+            ffi.Pointer<mln_offline_operation_id>,
+          )
+        >
+      >('mln_runtime_offline_region_create_start');
+  late final _mln_runtime_offline_region_create_start =
+      _mln_runtime_offline_region_create_startPtr
+          .asFunction<
+            int Function(
+              ffi.Pointer<mln_runtime>,
+              ffi.Pointer<mln_offline_region_definition>,
+              ffi.Pointer<ffi.Uint8>,
+              int,
+              ffi.Pointer<mln_offline_operation_id>,
+            )
+          >();
+
+  int mln_runtime_offline_region_get_start(
+    ffi.Pointer<mln_runtime> runtime,
+    int region_id,
+    ffi.Pointer<mln_offline_operation_id> out_operation_id,
+  ) {
+    return _mln_runtime_offline_region_get_start(
+      runtime,
+      region_id,
+      out_operation_id,
+    );
+  }
+
+  late final _mln_runtime_offline_region_get_startPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(
+            ffi.Pointer<mln_runtime>,
+            mln_offline_region_id,
+            ffi.Pointer<mln_offline_operation_id>,
+          )
+        >
+      >('mln_runtime_offline_region_get_start');
+  late final _mln_runtime_offline_region_get_start =
+      _mln_runtime_offline_region_get_startPtr
+          .asFunction<
+            int Function(
+              ffi.Pointer<mln_runtime>,
+              int,
+              ffi.Pointer<mln_offline_operation_id>,
+            )
+          >();
+
+  int mln_runtime_offline_regions_list_start(
+    ffi.Pointer<mln_runtime> runtime,
+    ffi.Pointer<mln_offline_operation_id> out_operation_id,
+  ) {
+    return _mln_runtime_offline_regions_list_start(runtime, out_operation_id);
+  }
+
+  late final _mln_runtime_offline_regions_list_startPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(
+            ffi.Pointer<mln_runtime>,
+            ffi.Pointer<mln_offline_operation_id>,
+          )
+        >
+      >('mln_runtime_offline_regions_list_start');
+  late final _mln_runtime_offline_regions_list_start =
+      _mln_runtime_offline_regions_list_startPtr
+          .asFunction<
+            int Function(
+              ffi.Pointer<mln_runtime>,
+              ffi.Pointer<mln_offline_operation_id>,
+            )
+          >();
+
+  int mln_runtime_offline_region_update_metadata_start(
+    ffi.Pointer<mln_runtime> runtime,
+    int region_id,
+    ffi.Pointer<ffi.Uint8> metadata,
+    int metadata_size,
+    ffi.Pointer<mln_offline_operation_id> out_operation_id,
+  ) {
+    return _mln_runtime_offline_region_update_metadata_start(
+      runtime,
+      region_id,
+      metadata,
+      metadata_size,
+      out_operation_id,
+    );
+  }
+
+  late final _mln_runtime_offline_region_update_metadata_startPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(
+            ffi.Pointer<mln_runtime>,
+            mln_offline_region_id,
+            ffi.Pointer<ffi.Uint8>,
+            ffi.Size,
+            ffi.Pointer<mln_offline_operation_id>,
+          )
+        >
+      >('mln_runtime_offline_region_update_metadata_start');
+  late final _mln_runtime_offline_region_update_metadata_start =
+      _mln_runtime_offline_region_update_metadata_startPtr
+          .asFunction<
+            int Function(
+              ffi.Pointer<mln_runtime>,
+              int,
+              ffi.Pointer<ffi.Uint8>,
+              int,
+              ffi.Pointer<mln_offline_operation_id>,
+            )
+          >();
+
+  int mln_runtime_offline_region_get_status_start(
+    ffi.Pointer<mln_runtime> runtime,
+    int region_id,
+    ffi.Pointer<mln_offline_operation_id> out_operation_id,
+  ) {
+    return _mln_runtime_offline_region_get_status_start(
+      runtime,
+      region_id,
+      out_operation_id,
+    );
+  }
+
+  late final _mln_runtime_offline_region_get_status_startPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(
+            ffi.Pointer<mln_runtime>,
+            mln_offline_region_id,
+            ffi.Pointer<mln_offline_operation_id>,
+          )
+        >
+      >('mln_runtime_offline_region_get_status_start');
+  late final _mln_runtime_offline_region_get_status_start =
+      _mln_runtime_offline_region_get_status_startPtr
+          .asFunction<
+            int Function(
+              ffi.Pointer<mln_runtime>,
+              int,
+              ffi.Pointer<mln_offline_operation_id>,
+            )
+          >();
+
+  int mln_runtime_offline_region_set_observed_start(
+    ffi.Pointer<mln_runtime> runtime,
+    int region_id,
+    bool observed,
+    ffi.Pointer<mln_offline_operation_id> out_operation_id,
+  ) {
+    return _mln_runtime_offline_region_set_observed_start(
+      runtime,
+      region_id,
+      observed,
+      out_operation_id,
+    );
+  }
+
+  late final _mln_runtime_offline_region_set_observed_startPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(
+            ffi.Pointer<mln_runtime>,
+            mln_offline_region_id,
+            ffi.Bool,
+            ffi.Pointer<mln_offline_operation_id>,
+          )
+        >
+      >('mln_runtime_offline_region_set_observed_start');
+  late final _mln_runtime_offline_region_set_observed_start =
+      _mln_runtime_offline_region_set_observed_startPtr
+          .asFunction<
+            int Function(
+              ffi.Pointer<mln_runtime>,
+              int,
+              bool,
+              ffi.Pointer<mln_offline_operation_id>,
+            )
+          >();
+
+  int mln_runtime_offline_region_set_download_state_start(
+    ffi.Pointer<mln_runtime> runtime,
+    int region_id,
+    int state,
+    ffi.Pointer<mln_offline_operation_id> out_operation_id,
+  ) {
+    return _mln_runtime_offline_region_set_download_state_start(
+      runtime,
+      region_id,
+      state,
+      out_operation_id,
+    );
+  }
+
+  late final _mln_runtime_offline_region_set_download_state_startPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(
+            ffi.Pointer<mln_runtime>,
+            mln_offline_region_id,
+            ffi.Uint32,
+            ffi.Pointer<mln_offline_operation_id>,
+          )
+        >
+      >('mln_runtime_offline_region_set_download_state_start');
+  late final _mln_runtime_offline_region_set_download_state_start =
+      _mln_runtime_offline_region_set_download_state_startPtr
+          .asFunction<
+            int Function(
+              ffi.Pointer<mln_runtime>,
+              int,
+              int,
+              ffi.Pointer<mln_offline_operation_id>,
+            )
+          >();
+
+  int mln_runtime_offline_region_invalidate_start(
+    ffi.Pointer<mln_runtime> runtime,
+    int region_id,
+    ffi.Pointer<mln_offline_operation_id> out_operation_id,
+  ) {
+    return _mln_runtime_offline_region_invalidate_start(
+      runtime,
+      region_id,
+      out_operation_id,
+    );
+  }
+
+  late final _mln_runtime_offline_region_invalidate_startPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(
+            ffi.Pointer<mln_runtime>,
+            mln_offline_region_id,
+            ffi.Pointer<mln_offline_operation_id>,
+          )
+        >
+      >('mln_runtime_offline_region_invalidate_start');
+  late final _mln_runtime_offline_region_invalidate_start =
+      _mln_runtime_offline_region_invalidate_startPtr
+          .asFunction<
+            int Function(
+              ffi.Pointer<mln_runtime>,
+              int,
+              ffi.Pointer<mln_offline_operation_id>,
+            )
+          >();
+
+  int mln_runtime_offline_region_delete_start(
+    ffi.Pointer<mln_runtime> runtime,
+    int region_id,
+    ffi.Pointer<mln_offline_operation_id> out_operation_id,
+  ) {
+    return _mln_runtime_offline_region_delete_start(
+      runtime,
+      region_id,
+      out_operation_id,
+    );
+  }
+
+  late final _mln_runtime_offline_region_delete_startPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(
+            ffi.Pointer<mln_runtime>,
+            mln_offline_region_id,
+            ffi.Pointer<mln_offline_operation_id>,
+          )
+        >
+      >('mln_runtime_offline_region_delete_start');
+  late final _mln_runtime_offline_region_delete_start =
+      _mln_runtime_offline_region_delete_startPtr
+          .asFunction<
+            int Function(
+              ffi.Pointer<mln_runtime>,
+              int,
+              ffi.Pointer<mln_offline_operation_id>,
+            )
+          >();
+
+  int mln_runtime_offline_region_create_take_result(
+    ffi.Pointer<mln_runtime> runtime,
+    int operation_id,
+    ffi.Pointer<ffi.Pointer<mln_offline_region_snapshot>> out_region,
+  ) {
+    return _mln_runtime_offline_region_create_take_result(
+      runtime,
+      operation_id,
+      out_region,
+    );
+  }
+
+  late final _mln_runtime_offline_region_create_take_resultPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(
+            ffi.Pointer<mln_runtime>,
+            mln_offline_operation_id,
+            ffi.Pointer<ffi.Pointer<mln_offline_region_snapshot>>,
+          )
+        >
+      >('mln_runtime_offline_region_create_take_result');
+  late final _mln_runtime_offline_region_create_take_result =
+      _mln_runtime_offline_region_create_take_resultPtr
+          .asFunction<
+            int Function(
+              ffi.Pointer<mln_runtime>,
+              int,
+              ffi.Pointer<ffi.Pointer<mln_offline_region_snapshot>>,
+            )
+          >();
+
+  int mln_runtime_offline_region_get_take_result(
+    ffi.Pointer<mln_runtime> runtime,
+    int operation_id,
+    ffi.Pointer<ffi.Pointer<mln_offline_region_snapshot>> out_region,
+    ffi.Pointer<ffi.Bool> out_found,
+  ) {
+    return _mln_runtime_offline_region_get_take_result(
+      runtime,
+      operation_id,
+      out_region,
+      out_found,
+    );
+  }
+
+  late final _mln_runtime_offline_region_get_take_resultPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(
+            ffi.Pointer<mln_runtime>,
+            mln_offline_operation_id,
+            ffi.Pointer<ffi.Pointer<mln_offline_region_snapshot>>,
+            ffi.Pointer<ffi.Bool>,
+          )
+        >
+      >('mln_runtime_offline_region_get_take_result');
+  late final _mln_runtime_offline_region_get_take_result =
+      _mln_runtime_offline_region_get_take_resultPtr
+          .asFunction<
+            int Function(
+              ffi.Pointer<mln_runtime>,
+              int,
+              ffi.Pointer<ffi.Pointer<mln_offline_region_snapshot>>,
+              ffi.Pointer<ffi.Bool>,
+            )
+          >();
+
+  int mln_runtime_offline_regions_list_take_result(
+    ffi.Pointer<mln_runtime> runtime,
+    int operation_id,
+    ffi.Pointer<ffi.Pointer<mln_offline_region_list>> out_regions,
+  ) {
+    return _mln_runtime_offline_regions_list_take_result(
+      runtime,
+      operation_id,
+      out_regions,
+    );
+  }
+
+  late final _mln_runtime_offline_regions_list_take_resultPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(
+            ffi.Pointer<mln_runtime>,
+            mln_offline_operation_id,
+            ffi.Pointer<ffi.Pointer<mln_offline_region_list>>,
+          )
+        >
+      >('mln_runtime_offline_regions_list_take_result');
+  late final _mln_runtime_offline_regions_list_take_result =
+      _mln_runtime_offline_regions_list_take_resultPtr
+          .asFunction<
+            int Function(
+              ffi.Pointer<mln_runtime>,
+              int,
+              ffi.Pointer<ffi.Pointer<mln_offline_region_list>>,
+            )
+          >();
+
+  int mln_runtime_offline_region_update_metadata_take_result(
+    ffi.Pointer<mln_runtime> runtime,
+    int operation_id,
+    ffi.Pointer<ffi.Pointer<mln_offline_region_snapshot>> out_region,
+  ) {
+    return _mln_runtime_offline_region_update_metadata_take_result(
+      runtime,
+      operation_id,
+      out_region,
+    );
+  }
+
+  late final _mln_runtime_offline_region_update_metadata_take_resultPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(
+            ffi.Pointer<mln_runtime>,
+            mln_offline_operation_id,
+            ffi.Pointer<ffi.Pointer<mln_offline_region_snapshot>>,
+          )
+        >
+      >('mln_runtime_offline_region_update_metadata_take_result');
+  late final _mln_runtime_offline_region_update_metadata_take_result =
+      _mln_runtime_offline_region_update_metadata_take_resultPtr
+          .asFunction<
+            int Function(
+              ffi.Pointer<mln_runtime>,
+              int,
+              ffi.Pointer<ffi.Pointer<mln_offline_region_snapshot>>,
+            )
+          >();
+
+  int mln_runtime_offline_region_get_status_take_result(
+    ffi.Pointer<mln_runtime> runtime,
+    int operation_id,
+    ffi.Pointer<mln_offline_region_status> out_status,
+  ) {
+    return _mln_runtime_offline_region_get_status_take_result(
+      runtime,
+      operation_id,
+      out_status,
+    );
+  }
+
+  late final _mln_runtime_offline_region_get_status_take_resultPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(
+            ffi.Pointer<mln_runtime>,
+            mln_offline_operation_id,
+            ffi.Pointer<mln_offline_region_status>,
+          )
+        >
+      >('mln_runtime_offline_region_get_status_take_result');
+  late final _mln_runtime_offline_region_get_status_take_result =
+      _mln_runtime_offline_region_get_status_take_resultPtr
+          .asFunction<
+            int Function(
+              ffi.Pointer<mln_runtime>,
+              int,
+              ffi.Pointer<mln_offline_region_status>,
+            )
+          >();
+
+  int mln_offline_region_snapshot_get(
+    ffi.Pointer<mln_offline_region_snapshot> snapshot,
+    ffi.Pointer<mln_offline_region_info> out_info,
+  ) {
+    return _mln_offline_region_snapshot_get(snapshot, out_info);
+  }
+
+  late final _mln_offline_region_snapshot_getPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(
+            ffi.Pointer<mln_offline_region_snapshot>,
+            ffi.Pointer<mln_offline_region_info>,
+          )
+        >
+      >('mln_offline_region_snapshot_get');
+  late final _mln_offline_region_snapshot_get =
+      _mln_offline_region_snapshot_getPtr
+          .asFunction<
+            int Function(
+              ffi.Pointer<mln_offline_region_snapshot>,
+              ffi.Pointer<mln_offline_region_info>,
+            )
+          >();
+
+  void mln_offline_region_snapshot_destroy(
+    ffi.Pointer<mln_offline_region_snapshot> snapshot,
+  ) {
+    return _mln_offline_region_snapshot_destroy(snapshot);
+  }
+
+  late final _mln_offline_region_snapshot_destroyPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Void Function(ffi.Pointer<mln_offline_region_snapshot>)
+        >
+      >('mln_offline_region_snapshot_destroy');
+  late final _mln_offline_region_snapshot_destroy =
+      _mln_offline_region_snapshot_destroyPtr
+          .asFunction<
+            void Function(ffi.Pointer<mln_offline_region_snapshot>)
+          >();
+
+  int mln_offline_region_list_count(
+    ffi.Pointer<mln_offline_region_list> list,
+    ffi.Pointer<ffi.Size> out_count,
+  ) {
+    return _mln_offline_region_list_count(list, out_count);
+  }
+
+  late final _mln_offline_region_list_countPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(
+            ffi.Pointer<mln_offline_region_list>,
+            ffi.Pointer<ffi.Size>,
+          )
+        >
+      >('mln_offline_region_list_count');
+  late final _mln_offline_region_list_count = _mln_offline_region_list_countPtr
+      .asFunction<
+        int Function(
+          ffi.Pointer<mln_offline_region_list>,
+          ffi.Pointer<ffi.Size>,
+        )
+      >();
+
+  int mln_offline_region_list_get(
+    ffi.Pointer<mln_offline_region_list> list,
+    int index,
+    ffi.Pointer<mln_offline_region_info> out_info,
+  ) {
+    return _mln_offline_region_list_get(list, index, out_info);
+  }
+
+  late final _mln_offline_region_list_getPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(
+            ffi.Pointer<mln_offline_region_list>,
+            ffi.Size,
+            ffi.Pointer<mln_offline_region_info>,
+          )
+        >
+      >('mln_offline_region_list_get');
+  late final _mln_offline_region_list_get = _mln_offline_region_list_getPtr
+      .asFunction<
+        int Function(
+          ffi.Pointer<mln_offline_region_list>,
+          int,
+          ffi.Pointer<mln_offline_region_info>,
+        )
+      >();
+
+  void mln_offline_region_list_destroy(
+    ffi.Pointer<mln_offline_region_list> list,
+  ) {
+    return _mln_offline_region_list_destroy(list);
+  }
+
+  late final _mln_offline_region_list_destroyPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Void Function(ffi.Pointer<mln_offline_region_list>)
+        >
+      >('mln_offline_region_list_destroy');
+  late final _mln_offline_region_list_destroy =
+      _mln_offline_region_list_destroyPtr
+          .asFunction<void Function(ffi.Pointer<mln_offline_region_list>)>();
 
   mln_map_options mln_map_options_default() {
     return _mln_map_options_default();

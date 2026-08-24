@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
 
@@ -7,7 +8,46 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_map_maplibre/flutter_map_maplibre.dart';
 import 'package:latlong2/latlong.dart';
 
-void main() => runApp(const ExampleApp());
+void main() {
+  // Persistent cache probe wiring (spec 2026-08-24): a real database path
+  // instead of :memory:. HOME is the app sandbox container on iOS.
+  // HOME is absent from the app process environment; systemTemp is
+  // <container>/tmp on iOS and the app cache dir on Android, so its parent
+  // is the app's data root on both. (A real app would use path_provider;
+  // the example stays dependency-free.)
+  try {
+    final dataRoot = Directory.systemTemp.parent.path;
+    final dir = Directory(
+      Platform.isAndroid
+          ? '$dataRoot/files/fmm_cache'
+          : '$dataRoot/Library/Application Support/fmm_cache',
+    )..createSync(recursive: true);
+    MaplibreCache.configure(directory: dir.path);
+  } on FileSystemException catch (e) {
+    debugPrint('[cache-probe] cache dir failed: $e');
+  }
+  debugPrint('[cache-probe] dbPath=${MaplibreCache.databasePath}');
+  MaplibreOffline.debugLogEvents = true;
+  // Cold-start-from-cache leg: the map must render Tallinn purely from the
+  // persisted database. A flag FILE (not env: Platform.environment is
+  // empty-ish inside the simulator app process) next to the database flips
+  // it, so the harness can touch it between launches of the same install:
+  //   touch "<container>/Library/Application Support/fmm_cache/force_offline"
+  final offlineFlag = File(
+    '${File(MaplibreCache.databasePath).parent.path}/force_offline',
+  );
+  if (const bool.fromEnvironment('FMM_START_OFFLINE') ||
+      offlineFlag.existsSync()) {
+    try {
+      OfflineCacheProbe.forceOffline();
+    } on ArgumentError catch (e) {
+      // Symbol missing from the binary (podspec -u flags not applied):
+      // surface it without killing the app.
+      debugPrint('[cache-probe] forceOffline failed: $e');
+    }
+  }
+  runApp(const ExampleApp());
+}
 
 const _tallinn = LatLng(59.437, 24.7536);
 // OpenFreeMap: full-planet OSM vector tiles, open infrastructure, no API key.
@@ -41,6 +81,83 @@ class _MapPageState extends State<MapPage> with SingleTickerProviderStateMixin {
   /// right depth can be found by feel: the setting where the marker locks to
   /// the map during a pan is the true BufferQueue latch latency.
   int _latencyFrames = FfiBasemapRenderer.androidPresentLatencyFrames;
+
+  OfflineRegionHandle? _seed;
+  Map<String, Object?> _cacheProbeStats = const {};
+
+  @override
+  void initState() {
+    super.initState();
+    // Headless driving of the offline seeding (no tap tooling on the
+    // simulator):  --dart-define=FMM_AUTO_PROBE=true
+    // starts it once the map has had time to come up.
+    if (const bool.fromEnvironment('FMM_AUTO_PROBE')) {
+      Future<void>.delayed(const Duration(seconds: 5), () {
+        if (mounted && _seed == null) _toggleCacheProbe();
+      });
+    }
+  }
+
+  /// Seeds a tiny Tallinn region — both themes as one unit — through the
+  /// real MaplibreOffline facade, streaming progress into the stats wall.
+  /// Tapping again deletes the seed (exercising delete, including
+  /// delete-while-active).
+  Future<void> _toggleCacheProbe() async {
+    if (_seed != null) {
+      final id = _seed!.id;
+      setState(() {
+        _seed = null;
+        _cacheProbeStats = const {};
+      });
+      try {
+        await MaplibreOffline.deleteRegion(id);
+        debugPrint('[cache-probe] deleted $id');
+      } on Object catch (e) {
+        debugPrint('[cache-probe] delete failed: $e');
+      }
+      return;
+    }
+    final handle = await MaplibreOffline.createRegion(
+      styleUrls: [_light, _darkStyle],
+      bounds: LatLngBounds(
+        LatLng(_tallinn.latitude - 0.015, _tallinn.longitude - 0.03),
+        LatLng(_tallinn.latitude + 0.015, _tallinn.longitude + 0.03),
+      ),
+      minZoom: 12,
+      maxZoom: 14,
+      maxTiles: 500,
+      pixelRatio: MediaQuery.of(context).devicePixelRatio,
+    );
+    debugPrint('[cache-probe] seed ${handle.id} created');
+    handle.progress.listen((p) {
+      debugPrint('[cache-probe] progress $p');
+      if (mounted) {
+        setState(
+          () => _cacheProbeStats = {
+            'seedTiles': '${p.completedTiles}/${p.requiredTiles}',
+            'seedResources': '${p.completedResources}/${p.requiredResources}',
+            'seedBytes': p.completedBytes,
+            'seedComplete': p.isComplete,
+          },
+        );
+      }
+    }, onError: (Object e) => debugPrint('[cache-probe] seed error: $e'));
+    unawaited(
+      handle.whenComplete.then(
+        (_) async {
+          debugPrint('[cache-probe] seed complete');
+          final regions = await MaplibreOffline.listRegions();
+          for (final region in regions) {
+            debugPrint('[cache-probe] listed: $region');
+          }
+        },
+        onError: (Object e) {
+          debugPrint('[cache-probe] seed failed: $e');
+        },
+      ),
+    );
+    setState(() => _seed = handle);
+  }
 
   void _cycleLatencyFrames() {
     setState(() {
@@ -93,9 +210,10 @@ class _MapPageState extends State<MapPage> with SingleTickerProviderStateMixin {
 
   @override
   Widget build(BuildContext context) {
-    final stats = _diagnostics.entries
-        .map((e) => '${e.key}: ${e.value}')
-        .join('   ');
+    final stats = [
+      ..._cacheProbeStats.entries.map((e) => '${e.key}: ${e.value}'),
+      ..._diagnostics.entries.map((e) => '${e.key}: ${e.value}'),
+    ].join('   ');
 
     return Scaffold(
       body: Stack(
@@ -184,6 +302,16 @@ class _MapPageState extends State<MapPage> with SingleTickerProviderStateMixin {
                         child: Text(_useWorker ? 'wkr' : 'ffi'),
                       ),
                     ],
+                    const SizedBox(height: 8),
+                    FloatingActionButton.small(
+                      heroTag: 'cache',
+                      onPressed: _toggleCacheProbe,
+                      child: Icon(
+                        _seed == null
+                            ? Icons.download_for_offline_outlined
+                            : Icons.stop_circle_outlined,
+                      ),
+                    ),
                     const SizedBox(height: 8),
                     // Multi-instance test case: push a second screen with its
                     // own map while this one stays mounted in the nav stack —

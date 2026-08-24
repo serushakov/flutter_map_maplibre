@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_map/flutter_map.dart';
 
 import '../basemap_renderer.dart';
+import '../cache_config.dart';
 import '../camera_conventions.dart';
 import 'maplibre_bindings.dart';
 import 'mln_library.dart';
@@ -20,6 +21,7 @@ const _cameraOptionCenter = 1 << 0; // MLN_CAMERA_OPTION_CENTER
 const _cameraOptionZoom = 1 << 1; // MLN_CAMERA_OPTION_ZOOM
 const _cameraOptionBearing = 1 << 2; // MLN_CAMERA_OPTION_BEARING
 const _mapModeContinuous = 0; // MLN_MAP_MODE_CONTINUOUS
+const _runtimeOptionMaxCacheSize = 1; // MLN_RUNTIME_OPTION_MAXIMUM_CACHE_SIZE
 
 typedef _PresentNative = Double Function(Int64);
 typedef _AttachNative = Int32 Function(Int64, Int64, Pointer<Int64>);
@@ -253,20 +255,53 @@ class FfiBasemapRenderer implements BasemapRenderer {
   /// Points [_runtime] at the shared runtime, creating it on first use.
   /// Returns the mln status (OK when the runtime already existed).
   int _acquireSharedRuntime() {
-    if (_sharedRuntime == nullptr) {
-      final options = calloc<mln_runtime_options>();
-      final cachePath = ':memory:'.toNativeUtf8();
-      options.ref = _b.mln_runtime_options_default();
-      options.ref.cache_path = cachePath.cast();
-      final status = _b.mln_runtime_create(options, _outRuntime);
-      calloc.free(options);
-      calloc.free(cachePath); // "Copied during runtime creation."
-      if (status != _statusOk) return status;
-      _sharedRuntime = _outRuntime.value;
-    }
+    final status = _ensureSharedRuntime();
+    if (status != _statusOk) return status;
     _sharedRuntimeUsers++;
     _runtime = _sharedRuntime;
     return _statusOk;
+  }
+
+  static int _ensureSharedRuntime() {
+    if (_sharedRuntime != nullptr) return _statusOk;
+    final options = calloc<mln_runtime_options>();
+    final outRuntime = calloc<Pointer<mln_runtime>>();
+    final cachePath = MaplibreCache.databasePath.toNativeUtf8();
+    options.ref = _b.mln_runtime_options_default();
+    options.ref.cache_path = cachePath.cast();
+    final maxBytes = MaplibreCache.maxAmbientBytes;
+    if (maxBytes != null) {
+      options.ref.flags |= _runtimeOptionMaxCacheSize;
+      options.ref.maximum_cache_size = maxBytes;
+    }
+    final status = _b.mln_runtime_create(options, outRuntime);
+    if (status == _statusOk) {
+      _sharedRuntime = outRuntime.value;
+      MaplibreCache.markRuntimeCreated();
+    }
+    calloc.free(options);
+    calloc.free(outRuntime);
+    calloc.free(cachePath); // "Copied during runtime creation."
+    return status;
+  }
+
+  /// A non-renderer hold on the shared runtime (the offline facade):
+  /// creates it if needed and takes one refcount, so an active download
+  /// survives the last map's dispose. Returns nullptr when creation fails.
+  /// Pair every call with [releaseRuntimeUser].
+  static Pointer<mln_runtime> acquireRuntimeUser() {
+    if (_ensureSharedRuntime() != _statusOk) return nullptr;
+    _sharedRuntimeUsers++;
+    return _sharedRuntime;
+  }
+
+  static void releaseRuntimeUser() {
+    assert(_sharedRuntimeUsers > 0, 'unbalanced releaseRuntimeUser');
+    _sharedRuntimeUsers--;
+    if (_sharedRuntimeUsers == 0 && _sharedRuntime != nullptr) {
+      _b.mln_runtime_destroy(_sharedRuntime);
+      _sharedRuntime = nullptr;
+    }
   }
 
   bool _failCreate() {
@@ -476,10 +511,65 @@ class FfiBasemapRenderer implements BasemapRenderer {
       if (status != _statusOk || !_hasEvent.value) break;
       // The queue is the shared runtime's: it interleaves every live map's
       // events, each carrying its source mln_map*. Route to that map's
-      // renderer — an unknown source is a runtime-scoped event or a map
-      // destroyed with events still queued; both drop (matching the old
-      // per-runtime switch's default).
-      _liveByMap[_event.ref.source.address]?._applyEvent(_event);
+      // renderer; an unknown source is a runtime-scoped event (offline
+      // operations — routed to the hook) or a map destroyed with events
+      // still queued (dropped, matching the old per-runtime switch's
+      // default).
+      final renderer = _liveByMap[_event.ref.source.address];
+      if (renderer != null) {
+        renderer._applyEvent(_event);
+      } else {
+        runtimeEventHook?.call(_event);
+      }
+    }
+  }
+
+  /// Offline-manager/probe seam: receives every polled event whose source is
+  /// not a live map — in practice the runtime-scoped offline events
+  /// (operation completed, region status/error). The event pointer is only
+  /// valid during the call.
+  static void Function(Pointer<mln_runtime_event> event)? runtimeEventHook;
+
+  /// The shared runtime, for the offline probe. Offline operations are legal
+  /// on it from the UI thread — the same owner-thread the renderers use.
+  static Pointer<mln_runtime> get sharedRuntimeForProbe => _sharedRuntime;
+
+  /// Pumps the shared runtime outside the render tick — the probe's driver
+  /// while downloads run and the map's ticker is parked.
+  static void pumpSharedRuntimeForProbe() => pumpSharedRuntime();
+
+  // Scratch for [pumpSharedRuntime] when no renderer is live to borrow from;
+  // allocated once, kept for the process (tiny, and the pump can outlive
+  // any individual runtime).
+  static Pointer<mln_runtime_event> _staticEvent = nullptr;
+  static Pointer<Bool> _staticHasEvent = nullptr;
+
+  /// Drains the shared runtime's queue outside the render tick: map events
+  /// go to their renderers, the rest to [runtimeEventHook]. The offline
+  /// facade drives this on its slow timer — including after the last map
+  /// disposed, when only its own runtime hold keeps the queue alive.
+  static void pumpSharedRuntime() {
+    if (_sharedRuntime == nullptr) return;
+    if (_liveByMap.isNotEmpty) {
+      // Borrow a live renderer's pump so its timing stats stay honest.
+      _liveByMap.values.first._pumpEvents();
+      return;
+    }
+    if (_staticEvent == nullptr) {
+      _staticEvent = calloc<mln_runtime_event>();
+      _staticHasEvent = calloc<Bool>();
+    }
+    _b.mln_runtime_run_once(_sharedRuntime);
+    while (true) {
+      _staticEvent.ref.size = sizeOf<mln_runtime_event>();
+      _staticHasEvent.value = false;
+      final status = _b.mln_runtime_poll_event(
+        _sharedRuntime,
+        _staticEvent,
+        _staticHasEvent,
+      );
+      if (status != _statusOk || !_staticHasEvent.value) break;
+      runtimeEventHook?.call(_staticEvent);
     }
   }
 

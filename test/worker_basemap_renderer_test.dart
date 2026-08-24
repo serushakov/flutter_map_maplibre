@@ -39,6 +39,8 @@ class FakeLink implements WorkerLink {
     required double scale,
     required String styleUrl,
     required int presenterId,
+    required String cachePath,
+    required int maxCacheBytes,
   }) => calls.add('create:$width:$height:$presenterId');
 
   @override

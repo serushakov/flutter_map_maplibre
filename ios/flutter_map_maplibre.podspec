@@ -70,8 +70,12 @@ with the camera owned by Dart.
     # the lookup. non-global keeps them in the symbol table.
     'STRIP_STYLE' => 'non-global',
     # The keeper object defines no symbol anyone references, so the linker
-    # would skip that archive member entirely; -u forces it in.
-    'OTHER_LDFLAGS' => '$(inherited) -Wl,-u,_mln_ffi_symbol_keeper',
+    # would skip that archive member entirely; -u forces it in. The network
+    # status pair lives in an archive member the keeper does not reach, so
+    # each needs its own -u or dlsym cannot find it.
+    'OTHER_LDFLAGS' =>
+      '$(inherited) -Wl,-u,_mln_ffi_symbol_keeper ' \
+      '-Wl,-u,_mln_network_status_set -Wl,-u,_mln_network_status_get',
     # maplibre-native-ffi has no x86_64 simulator preset, so a universal
     # simulator build has nothing to link for that slice.
     'EXCLUDED_ARCHS[sdk=iphonesimulator*]' => 'i386 x86_64',

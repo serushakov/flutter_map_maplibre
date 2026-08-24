@@ -8,7 +8,16 @@ import 'mln_library.dart';
 typedef _InitNative = IntPtr Function(Pointer<Void>);
 typedef _StartNative = Int64 Function(Int64);
 typedef _PostCreateNative =
-    Void Function(Int64, Int32, Int32, Double, Pointer<Utf8>, Int64);
+    Void Function(
+      Int64,
+      Int32,
+      Int32,
+      Double,
+      Pointer<Utf8>,
+      Int64,
+      Pointer<Utf8>,
+      Uint64,
+    );
 typedef _PostVoidNative = Void Function(Int64);
 typedef _PostJumpNative =
     Void Function(Int64, Double, Double, Double, Double, Int64);
@@ -29,6 +38,8 @@ abstract interface class WorkerLink {
     required double scale,
     required String styleUrl,
     required int presenterId,
+    required String cachePath,
+    required int maxCacheBytes,
   });
   void postPump();
   void postJump({
@@ -55,11 +66,29 @@ class FfiWorkerLink implements WorkerLink {
       );
   static final int Function(int) _start = mlnLibrary
       .lookupFunction<_StartNative, int Function(int)>('fmm_worker_start');
-  static final void Function(int, int, int, double, Pointer<Utf8>, int)
+  static final void Function(
+    int,
+    int,
+    int,
+    double,
+    Pointer<Utf8>,
+    int,
+    Pointer<Utf8>,
+    int,
+  )
   _postCreate = mlnLibrary
       .lookupFunction<
         _PostCreateNative,
-        void Function(int, int, int, double, Pointer<Utf8>, int)
+        void Function(
+          int,
+          int,
+          int,
+          double,
+          Pointer<Utf8>,
+          int,
+          Pointer<Utf8>,
+          int,
+        )
       >('fmm_worker_post_create');
   static final void Function(int) _postPump = mlnLibrary
       .lookupFunction<_PostVoidNative, void Function(int)>(
@@ -110,10 +139,23 @@ class FfiWorkerLink implements WorkerLink {
     required double scale,
     required String styleUrl,
     required int presenterId,
+    required String cachePath,
+    required int maxCacheBytes,
   }) {
     final url = styleUrl.toNativeUtf8();
-    _postCreate(_worker, width, height, scale, url, presenterId);
-    calloc.free(url); // the worker copied it on this thread
+    final cache = cachePath.toNativeUtf8();
+    _postCreate(
+      _worker,
+      width,
+      height,
+      scale,
+      url,
+      presenterId,
+      cache,
+      maxCacheBytes,
+    );
+    calloc.free(url); // the worker copied both on this thread
+    calloc.free(cache);
   }
 
   @override
