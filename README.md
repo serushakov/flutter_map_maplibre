@@ -145,6 +145,81 @@ sources shared between the two styles are not re-downloaded.
 | `applyResidualTransform` | `true` | Debugging escape hatch. False draws failed renders uncorrected. Never ship it false. |
 | `rendererFactory` | platform default | Test/A-B seam. Android → `WorkerBasemapRenderer`, iOS → `FfiBasemapRenderer`. |
 
+## Caching and offline
+
+Unconfigured, the map caches in `:memory:` and every launch starts cold.
+One call before the first map gives it a durable cache:
+
+```dart
+MaplibreCache.configure(
+  directory: appSupportDir.path,       // caller-owned; no path_provider dep
+  maxAmbientBytes: 50 * 1024 * 1024,   // optional cap on the evictable class
+);
+```
+
+That alone buys the everyday win: tiles, glyphs, sprites and styles a user
+has seen are served from disk, revalidated with cheap 304s when online, and
+still render when the connection is bad or gone. The database holds two
+classes of data — an **ambient** LRU bounded by `maxAmbientBytes`, and
+**seeded regions**, which are pinned outside that budget.
+
+### Seeding regions
+
+```dart
+final region = await MaplibreOffline.createRegion(
+  styleUrls: [lightStyleUrl, darkStyleUrl], // seed both themes as one unit
+  bounds: LatLngBounds(sw, ne),
+  minZoom: 6,
+  maxZoom: 14,
+  maxTiles: 4000,           // Web-Mercator estimate checked before any I/O
+  pixelRatio: devicePixelRatio,
+);
+region.progress.listen((p) { /* p.completedTiles / p.requiredTiles ... */ });
+await region.whenComplete;
+
+final regions = await MaplibreOffline.listRegions();
+await MaplibreOffline.deleteRegion(region.id);
+```
+
+Pass every theme the app ships: tiles are cached by URL, so a light/dark
+pair whose styles reference the same tile sources shares them — the second
+theme costs kilobytes. The download continues while the app runs even with
+no map on screen; it does not resume itself on the next launch (re-create
+the same region: rows already present pin instantly, only missing ones
+fetch). `createRegion` throws `TileBudgetExceeded` when the estimate blows
+`maxTiles`.
+
+### The cache key — a remote kill switch
+
+For the day broken tiles ship and get cached on customer devices:
+
+```dart
+await MaplibreCache.setCacheKey(remoteConfig.getString('map_cache_key'));
+```
+
+The key is an opaque token compared for *difference* against a persisted
+copy. A change triggers a full destructive purge — seeded regions deleted
+and re-seeded, ambient cleared, live maps re-rendered so bad pixels leave
+the screen as fresh tiles arrive. Unchanged keys are free, so call it on
+every Remote Config activation; a key arriving mid-session purges
+retroactively; `null` means "not managing". The key persists only after the
+purge commits, so a crash mid-purge re-runs it.
+
+### What the server must hold up
+
+1. **Stable tile URLs.** Freshness flows through HTTP revalidation and, in
+   emergencies, the cache key — never URL rotation. A rotated URL silently
+   orphans every seeded region.
+2. **Theme pairs share tile source URLs, character-identical.** That is
+   what makes the second theme free.
+3. **Style JSON served with short max-age (or `no-cache`) plus an etag;
+   tiles long max-age.** The style is tiny — making every launch a 304
+   check is what carries routine updates to devices.
+
+Design details, probe results and the upstream source-reading that shaped
+this live in
+[the spec](docs/superpowers/specs/2026-08-24-persistent-cache-and-offline-seeding.md).
+
 ## How it works
 
 ### The stale frame is placed, not hidden
@@ -282,7 +357,6 @@ Read this list before shipping it.
 - **Resize** destroys and recreates the render session, because borrowed
   texture sessions cannot be resized in place. Fine for device rotation;
   `fixedViewport` is the answer for a continuously-dragging bottom sheet.
-- **Offline and caching.** The runtime uses `:memory:` for its cache.
 - **Error handling.** A failed style load surfaces in diagnostics; there is no
   fallback to raster tiles.
 - **Debug builds mislead on Android.** JIT Dart makes per-gesture widget work

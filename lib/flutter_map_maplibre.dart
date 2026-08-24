@@ -1,12 +1,12 @@
 export 'src/basemap_renderer.dart';
 export 'src/cache_config.dart';
 export 'src/ffi/ffi_basemap_renderer.dart';
-export 'src/ffi/offline_cache_probe.dart';
 export 'src/ffi/worker_basemap_renderer.dart';
 export 'src/ffi/worker_link.dart';
 export 'src/maplibre_basemap.dart';
 export 'src/offline/ffi_offline_link.dart';
 export 'src/offline/maplibre_offline.dart';
+export 'src/offline/network_status.dart';
 export 'src/offline/offline_link.dart';
 export 'src/offline/worker_offline_link.dart';
 export 'src/offline/offline_types.dart';

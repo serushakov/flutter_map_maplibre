@@ -22,7 +22,13 @@ void main() {
           ? '$dataRoot/files/fmm_cache'
           : '$dataRoot/Library/Application Support/fmm_cache',
     )..createSync(recursive: true);
-    MaplibreCache.configure(directory: dir.path);
+    // FMM_AMBIENT_CAP (bytes) exercises eviction: ambient stays under the
+    // cap while seeded regions stay pinned outside it.
+    const cap = int.fromEnvironment('FMM_AMBIENT_CAP');
+    MaplibreCache.configure(
+      directory: dir.path,
+      maxAmbientBytes: cap > 0 ? cap : null,
+    );
   } on FileSystemException catch (e) {
     debugPrint('[cache-probe] cache dir failed: $e');
   }
@@ -39,7 +45,8 @@ void main() {
   if (const bool.fromEnvironment('FMM_START_OFFLINE') ||
       offlineFlag.existsSync()) {
     try {
-      OfflineCacheProbe.forceOffline();
+      final status = MaplibreNetwork.setOffline(true);
+      debugPrint('[cache-probe] network_status_set(OFFLINE) -> $status');
     } on ArgumentError catch (e) {
       // Symbol missing from the binary (podspec -u flags not applied):
       // surface it without killing the app.
@@ -96,6 +103,40 @@ class _MapPageState extends State<MapPage> with SingleTickerProviderStateMixin {
         if (mounted && _seed == null) _toggleCacheProbe();
       });
     }
+    // Eviction harness: sweep the camera across Europe to fill the ambient
+    // class well past any FMM_AMBIENT_CAP, then park back on Tallinn.
+    if (const bool.fromEnvironment('FMM_AUTO_TOUR')) {
+      Future<void>.delayed(const Duration(seconds: 8), _runTour);
+    }
+  }
+
+  Future<void> _runTour() async {
+    const stops = [
+      LatLng(59.437, 24.7536), // Tallinn
+      LatLng(56.9496, 24.1052), // Riga
+      LatLng(54.6872, 25.2797), // Vilnius
+      LatLng(52.2297, 21.0122), // Warsaw
+      LatLng(50.0755, 14.4378), // Prague
+      LatLng(48.2082, 16.3738), // Vienna
+      LatLng(47.4979, 19.0402), // Budapest
+      LatLng(52.52, 13.405), // Berlin
+      LatLng(48.8566, 2.3522), // Paris
+      LatLng(51.5072, -0.1276), // London
+      LatLng(40.4168, -3.7038), // Madrid
+      LatLng(41.9028, 12.4964), // Rome
+    ];
+    debugPrint('[cache-probe] tour start');
+    for (final stop in stops) {
+      if (!mounted) return;
+      // A few zooms per city: each level fetches a fresh tile set.
+      for (final zoom in const [9.0, 11.0, 13.0]) {
+        _mapController.move(stop, zoom);
+        await Future<void>.delayed(const Duration(milliseconds: 2500));
+        if (!mounted) return;
+      }
+    }
+    _mapController.move(_tallinn, 13);
+    debugPrint('[cache-probe] tour done');
   }
 
   /// Seeds a tiny Tallinn region — both themes as one unit — through the

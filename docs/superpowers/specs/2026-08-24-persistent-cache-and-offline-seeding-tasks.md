@@ -144,19 +144,24 @@ Order is dependency-driven; tasks within a phase are mostly parallelizable.
 
 ## Phase 5 — hardening + polish
 
-- [ ] **5.1** Ambient byte-cap eviction check on device: small
-      `maxAmbientBytes`, pan far, DB stays bounded, pinned region tiles
-      survive.
-- [ ] **5.2** Example app: replace `OfflineCacheProbe` UI with the real
-      `MaplibreOffline` API (seed button, region list, progress, cache-key
-      switch); drop or de-export `offline_cache_probe.dart` from the public
-      surface (keep `forceOffline` somewhere test-only).
-- [ ] **5.3** Docs: README caching section (configure, seeding, cache key,
-      server-side invariants: stable tile URLs, theme pairs sharing
-      character-identical source URLs, style JSON no-cache+etag); dartdoc on
-      the public API.
-- [ ] **5.4** Full sweep: `dart format`, `flutter analyze`, full test suite,
-      both-platform manual smoke; commit(s).
+- [x] **5.1** Eviction check (2026-08-24, iPhone 17 Pro sim): 8 MB cap +
+      seeded pair + automated 12-city/3-zoom Europe tour. Result: ambient
+      0.8 MB (≤ cap; ~7 MB of DB free pages are the evicted rows), pinned
+      regions fully intact (40 tile rows, 532 resource rows, 19.6 MB,
+      both regions present). Byte cap and pin protection both verified.
+- [x] **5.2** `offline_cache_probe.dart` deleted; force-offline survives as
+      the public `MaplibreNetwork.setOffline(bool)` (documented as a
+      testing tool with its ticker-starvation caveat); example runs
+      entirely on the real facade (seed/delete FAB, cache-key FAB,
+      FMM_AUTO_PROBE / FMM_AUTO_KEYFLIP / FMM_AUTO_TOUR / FMM_AMBIENT_CAP
+      harness defines).
+- [x] **5.3** README "Caching and offline" section: configure, seeding,
+      cache key, the three server-side invariants, spec pointer; the
+      ":memory: only" line dropped from Not-done-yet. Public API carries
+      dartdoc throughout.
+- [x] **5.4** Sweep: format clean, analyze clean (one pre-existing info),
+      145 tests, device smokes on both platforms across phases 2–5;
+      committed per phase.
 
 ## Carried caveats
 
