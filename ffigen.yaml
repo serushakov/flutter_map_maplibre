@@ -30,6 +30,7 @@ functions:
     - 'mln_metal_borrowed_texture_descriptor_default'
     - 'mln_metal_borrowed_texture_attach'
     - 'mln_render_session_render_update'
+    - 'mln_render_session_clear_data'
     - 'mln_render_session_destroy'
     - 'mln_network_status_get'
     - 'mln_network_status_set'

@@ -106,24 +106,41 @@ Order is dependency-driven; tasks within a phase are mostly parallelizable.
 
 ## Phase 4 — cache key (purge-only)
 
-- [ ] **4.1** Key persistence: package-owned prefs file next to (not inside)
-      the DB; read at startup; write only after a purge commits
-      (at-least-once semantics).
-- [ ] **4.2** `MaplibreCache.setCacheKey(String?)`: equality not ordering;
-      null = feature off; callable pre-runtime (records intent, sweeps at
-      first runtime creation); idempotent; tolerates mid-flight arrival
-      (Remote Config lands after maps are live) and key changes while a
-      purge is already running.
-- [ ] **4.3** Purge sequence: capture region definitions → delete regions
-      (CLEAR can't touch pinned rows) → ambient CLEAR → recreate +
-      reactivate seeds → persist key → nudge every live renderer:
-      same-URL `set_style_url` + `mln_render_session_clear_data` + repaint
-      (per 0.1; renderer-level, not widget — the widget dedupes; ffigen
-      addition needed for `clear_data` on iOS, `kClearData` command on
-      Android).
-- [ ] **4.4** Tests: crash-ordering (key persisted only post-commit → rerun
-      is safe), mid-flight key switch, purge-while-download-active,
-      no-op when key unchanged.
+- [x] **4.1** Key persistence: `<directory>/maplibre_cache.key` next to the
+      DB (survives the purge); written flush-synced only after the purge
+      commits (at-least-once).
+- [x] **4.2** `MaplibreCache.setCacheKey(String?)` (machinery in
+      `MaplibreOffline.setCacheKey` — purge runs through the offline
+      link): equality not ordering; null never purges; unconfigured throws
+      synchronously; calls serialize on a queue and each re-reads the
+      persisted key, which covers both mid-flight arrival and key changes
+      during a running purge. Pre-runtime calls just run immediately —
+      the offline link creates the runtime on demand, so no deferred
+      "intent" state was needed.
+- [x] **4.3** Purge: capture (raw records incl. metadata, so group ids
+      survive the rebuild) → abort live handles → delete regions →
+      ambient CLEAR → recreate + reactivate + prime (registered as groups
+      so the runtime hold outlives the purge until rebuilds finish) →
+      persist key → nudge. Nudge = renderer-level same-URL `setStyle` +
+      `mln_render_session_clear_data` + repaint on iOS
+      (`FfiBasemapRenderer.nudgeAllForCachePurge`, new ffigen binding —
+      no extra podspec `-u` needed, symbol resolved) and same-URL
+      `postSetStyle` + new `kClearData` worker command on Android
+      (`WorkerBasemapRenderer.nudgeAllForCachePurge`); renderers now
+      track their current style URL for it.
+- [x] **4.4** 7 tests: unconfigured throw, null no-op, full spec-order
+      purge sequence + nudge + persist-after-commit, unchanged-key no-op,
+      failed purge leaves key unpersisted + retry re-runs, mid-download
+      flip aborts the handle and rebuilds the same group id, concurrent
+      calls serialize (last key wins). Suite: 145 green.
+      **Device-verified both platforms** (2026-08-24): auto key-flip after
+      seed — purge event trace shows list → delete×2 → clear → create
+      (new ids) → downloads restarting from 0 bytes with progressive
+      status events (genuinely destructive; darwin HTTP layer has
+      `URLCache = nil` + `ReloadIgnoringLocalCacheData`, so re-downloads
+      cannot be served from an OS HTTP cache); live map re-renders after
+      the nudge on both iOS (shared-runtime path) and Android (worker
+      `kClearData`); rebuilt regions listed complete.
 
 ## Phase 5 — hardening + polish
 

@@ -5,6 +5,9 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_map/flutter_map.dart' show LatLngBounds;
 
+import '../cache_config.dart';
+import '../ffi/ffi_basemap_renderer.dart';
+import '../ffi/worker_basemap_renderer.dart';
 import 'ffi_offline_link.dart';
 import 'offline_link.dart';
 import 'offline_types.dart';
@@ -159,31 +162,7 @@ class MaplibreOffline {
         _groupByRegion[regionId] = group;
       }
       try {
-        for (final regionId in regionIds) {
-          await _request<Object?>(
-            (id, link) => link.setObserved(
-              requestId: id,
-              regionId: regionId,
-              observed: true,
-            ),
-          );
-          await _request<Object?>(
-            (id, link) => link.setDownloadState(
-              requestId: id,
-              regionId: regionId,
-              active: true,
-            ),
-          );
-        }
-        // Prime every member with a status snapshot (the reply routes into
-        // the group like any status event): a member whose resources were
-        // already fully cached may complete without ever emitting an
-        // observed change.
-        for (final regionId in regionIds) {
-          await _request<OfflineRegionProgress>(
-            (id, link) => link.requestStatus(requestId: id, regionId: regionId),
-          );
-        }
+        await _observeActivatePrime(regionIds);
       } catch (error) {
         group._abort(StateError('offline region setup failed: $error'));
         await rollback();
@@ -266,6 +245,148 @@ class MaplibreOffline {
               link.deleteRegion(requestId: requestId, regionId: regionId),
         );
       }
+    } finally {
+      _busy--;
+      _maybeGoIdle();
+    }
+  }
+
+  /// Observe + activate + status-prime every member of a just-registered
+  /// group. The prime replies route into the group like any status event:
+  /// a member whose resources were already fully cached may complete
+  /// without ever emitting an observed change.
+  static Future<void> _observeActivatePrime(List<int> regionIds) async {
+    for (final regionId in regionIds) {
+      await _request<Object?>(
+        (id, link) =>
+            link.setObserved(requestId: id, regionId: regionId, observed: true),
+      );
+      await _request<Object?>(
+        (id, link) => link.setDownloadState(
+          requestId: id,
+          regionId: regionId,
+          active: true,
+        ),
+      );
+    }
+    for (final regionId in regionIds) {
+      await _request<OfflineRegionProgress>(
+        (id, link) => link.requestStatus(requestId: id, regionId: regionId),
+      );
+    }
+  }
+
+  // --- cache key (the remote kill switch) ---------------------------------
+
+  /// The purge nudge for live maps, swappable in tests.
+  @visibleForTesting
+  static void Function() nudgeLiveRenderers = _defaultNudge;
+
+  static void _defaultNudge() {
+    FfiBasemapRenderer.nudgeAllForCachePurge();
+    WorkerBasemapRenderer.nudgeAllForCachePurge();
+  }
+
+  static Future<void> _keyQueue = Future.value();
+
+  /// See [MaplibreCache.setCacheKey] — that is the canonical entry point;
+  /// the machinery lives here because the purge runs through the offline
+  /// link.
+  ///
+  /// Compares [key] against the persisted copy (equality, not ordering)
+  /// and on difference runs the full destructive purge: capture region
+  /// definitions → delete regions → clear ambient → recreate + reactivate
+  /// seeds → persist the key → nudge live maps. The key persists only
+  /// after the purge commits (at-least-once: a crash mid-purge re-runs it
+  /// on the next call). Calls serialize; an unchanged key is a free no-op;
+  /// null means "not managing" and never purges.
+  static Future<void> setCacheKey(String? key) {
+    if (key == null) return Future.value();
+    // Fail fast on misconfiguration, synchronously and every call.
+    final file = _cacheKeyFile();
+    final queued = _keyQueue.then((_) => _applyCacheKey(key, file));
+    // Keep the queue alive past failures; the caller still sees the error.
+    _keyQueue = queued.then((_) {}, onError: (Object _) {});
+    return queued;
+  }
+
+  static File _cacheKeyFile() {
+    final directory = MaplibreCache.directory;
+    if (directory == null) {
+      throw StateError(
+        'MaplibreCache.configure must run before setCacheKey: the key '
+        'persists next to the database.',
+      );
+    }
+    return File('$directory/maplibre_cache.key');
+  }
+
+  static Future<void> _applyCacheKey(String key, File file) async {
+    // Re-read inside the queue: an earlier queued call may just have
+    // persisted this same key.
+    final persisted = file.existsSync() ? file.readAsStringSync() : null;
+    if (persisted == key) return;
+    await _purge();
+    file.writeAsStringSync(key, flush: true);
+  }
+
+  /// The one destructive path. Retroactive by construction: it removes
+  /// every row present at this moment, so a key that arrives mid-flight
+  /// (Remote Config) still catches tiles fetched since launch.
+  static Future<void> _purge() async {
+    _busy++;
+    try {
+      // 1. Capture region definitions (styleUrl + geometry + metadata —
+      // the group ids survive the rebuild).
+      final records = await _request<List<OfflineRegionRecord>>(
+        (id, link) => link.listRegions(requestId: id),
+      );
+      // Live handles reference native regions that are about to die.
+      for (final group in List.of(_groups.values)) {
+        group._abort(StateError('cache key changed: seeds rebuilding'));
+      }
+      // 2. Delete every region — CLEAR alone cannot touch region-pinned
+      // rows.
+      for (final record in records) {
+        await _request<Object?>(
+          (id, link) =>
+              link.deleteRegion(requestId: id, regionId: record.regionId),
+        );
+      }
+      // 3. Now everything is deletable: clear the ambient class.
+      await _request<Object?>(
+        (id, link) => link.ambientOp(requestId: id, op: AmbientCacheOp.clear),
+      );
+      // 4. Recreate + reactivate the seeds so they rebuild from the fixed
+      // server as connectivity allows. Registered as groups so the link
+      // (and its runtime hold) stays alive until the rebuilds finish.
+      final byGroup = <String, List<OfflineRegionRecord>>{};
+      for (final record in records) {
+        byGroup.putIfAbsent(_groupIdOf(record), () => []).add(record);
+      }
+      for (final entry in byGroup.entries) {
+        final regionIds = <int>[];
+        for (final record in entry.value) {
+          regionIds.add(
+            await _request<int>(
+              (id, link) => link.createRegion(
+                requestId: id,
+                definition: record.definition,
+                metadata: record.metadata,
+              ),
+            ),
+          );
+        }
+        final group = _RegionGroup(entry.key, regionIds.toSet());
+        _groups[entry.key] = group;
+        for (final regionId in regionIds) {
+          _groupByRegion[regionId] = group;
+        }
+        await _observeActivatePrime(regionIds);
+      }
+      // 5. Re-render live maps so garbled pixels leave the screen as fresh
+      // tiles arrive rather than lingering until the user pans.
+      nudgeLiveRenderers();
     } finally {
       _busy--;
       _maybeGoIdle();
@@ -413,6 +534,8 @@ class MaplibreOffline {
     _link?.dispose();
     _link = null;
     debugLinkFactory = null;
+    nudgeLiveRenderers = _defaultNudge;
+    _keyQueue = Future.value();
   }
 }
 

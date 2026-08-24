@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_map/flutter_map.dart';
@@ -385,6 +386,110 @@ void main() {
     await expectLater(createTallinn(), throwsStateError);
   });
 
+  group('setCacheKey', () {
+    late Directory tmp;
+    late int nudges;
+    String keyPath() => '${tmp.path}/maplibre_cache.key';
+
+    setUp(() {
+      MaplibreCache.resetForTesting();
+      tmp = Directory.systemTemp.createTempSync('fmm_key_test');
+      MaplibreCache.configure(directory: tmp.path);
+      nudges = 0;
+      MaplibreOffline.nudgeLiveRenderers = () => nudges++;
+    });
+
+    tearDown(() {
+      MaplibreCache.resetForTesting();
+      tmp.deleteSync(recursive: true);
+    });
+
+    test('unconfigured throws before touching anything', () {
+      MaplibreCache.resetForTesting();
+      expect(() => MaplibreCache.setCacheKey('x'), throwsStateError);
+      expect(factoryCalls, 0);
+    });
+
+    test('null never purges', () async {
+      await MaplibreCache.setCacheKey(null);
+      expect(link.log, isEmpty);
+      expect(factoryCalls, 0);
+      expect(nudges, 0);
+    });
+
+    test('a changed key runs the full purge in spec order', () async {
+      await createTallinn(styles: ['https://s/light', 'https://s/dark']);
+      link.log.clear();
+
+      await MaplibreCache.setCacheKey('v1');
+
+      expect(link.log, [
+        'list', // 1. capture definitions
+        'delete:1', 'delete:2', // 2. delete regions (unpin)
+        'ambient:clear', // 3. clear the ambient class
+        'create:https://s/light', 'create:https://s/dark', // 4. recreate…
+        'observe:3:true', 'downloadState:3:true',
+        'observe:4:true', 'downloadState:4:true', // …and reactivate
+        'status:3', 'status:4', // priming snapshots
+      ]);
+      expect(nudges, 1); // 5. re-render live maps
+      // The key persists only after the purge committed.
+      expect(File(keyPath()).readAsStringSync(), 'v1');
+    });
+
+    test('an unchanged key is a free no-op', () async {
+      await MaplibreCache.setCacheKey('v1');
+      link.log.clear();
+      nudges = 0;
+
+      await MaplibreCache.setCacheKey('v1');
+      expect(link.log, isEmpty);
+      expect(nudges, 0);
+    });
+
+    test('a failed purge leaves the key unpersisted; retry re-runs', () async {
+      final failing = _FailingAmbientLink();
+      link = failing;
+
+      await expectLater(MaplibreCache.setCacheKey('v1'), throwsStateError);
+      expect(File(keyPath()).existsSync(), false);
+      expect(nudges, 0);
+
+      failing.failAmbient = false;
+      await MaplibreCache.setCacheKey('v1');
+      expect(File(keyPath()).readAsStringSync(), 'v1');
+      expect(nudges, 1);
+    });
+
+    test(
+      'mid-download flip aborts the handle, rebuilds the same group',
+      () async {
+        final handle = await createTallinn(
+          styles: ['https://s/light', 'https://s/dark'],
+        );
+        final aborted = expectLater(handle.whenComplete, throwsStateError);
+
+        await MaplibreCache.setCacheKey('v2');
+        await aborted;
+
+        // The rebuilt seeds carried their metadata, so the group identity
+        // (and with it the caller's stored id) survives the purge.
+        final regions = await MaplibreOffline.listRegions();
+        final rebuilt = regions.singleWhere((r) => r.id == handle.id);
+        expect(rebuilt.styleUrls, ['https://s/light', 'https://s/dark']);
+      },
+    );
+
+    test('concurrent calls serialize; the last key wins', () async {
+      final first = MaplibreCache.setCacheKey('a');
+      final second = MaplibreCache.setCacheKey('b');
+      await first;
+      await second;
+      expect(File(keyPath()).readAsStringSync(), 'b');
+      expect(link.log.where((l) => l == 'ambient:clear').length, 2);
+    });
+  });
+
   test('estimateTileCount delegates to the pure function', () {
     expect(
       MaplibreOffline.estimateTileCount(
@@ -407,6 +512,20 @@ void main() {
 class _NoStartLink extends FakeOfflineLink {
   @override
   bool start(void Function(OfflineEvent event) onEvent) => false;
+}
+
+class _FailingAmbientLink extends FakeOfflineLink {
+  bool failAmbient = true;
+
+  @override
+  void ambientOp({required int requestId, required AmbientCacheOp op}) {
+    log.add('ambient:${op.name}');
+    if (failAmbient) {
+      emit(OfflineOperationFailed(requestId: requestId, message: 'disk full'));
+      return;
+    }
+    emit(OfflineAmbientOpCompleted(requestId: requestId));
+  }
 }
 
 class _InstantlyCompleteLink extends FakeOfflineLink {

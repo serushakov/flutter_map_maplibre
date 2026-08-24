@@ -66,6 +66,7 @@ class FfiBasemapRenderer implements BasemapRenderer {
   Pointer<mln_map> _map = nullptr;
   Pointer<mln_render_session> _session = nullptr;
   int _presenterId = -1;
+  String? _currentStyleUrl;
 
   // Reused native scratch, allocated in create and freed in dispose.
   Pointer<mln_camera_options> _camera = nullptr;
@@ -221,6 +222,7 @@ class FfiBasemapRenderer implements BasemapRenderer {
       styleNative.cast(),
     );
     calloc.free(styleNative);
+    _currentStyleUrl = styleUrl;
     _b.mln_map_request_repaint(_map);
 
     final int attachStatus;
@@ -604,8 +606,27 @@ class FfiBasemapRenderer implements BasemapRenderer {
       native.cast(),
     );
     calloc.free(native);
+    _currentStyleUrl = styleUrl;
     _b.mln_map_request_repaint(_map);
     _idleSinceLastJump = false;
+  }
+
+  /// Cache-purge nudge (spec source check 0.1) for every live renderer:
+  /// re-issue the current style URL — nothing dedupes below this, so style
+  /// JSON, TileJSON, sprites and glyphs re-fetch — then clear the render
+  /// sources, because a same-URL reload keeps the in-memory tile pyramids
+  /// (the reparsed tileset compares value-equal). The next update
+  /// re-creates every source with an empty pyramid and all visible tiles
+  /// re-fetch. Owner-thread only, which is exactly this thread.
+  static void nudgeAllForCachePurge() {
+    for (final renderer in List.of(_liveByMap.values)) {
+      final url = renderer._currentStyleUrl;
+      if (url != null) renderer.setStyle(url);
+      if (renderer._session != nullptr) {
+        _b.mln_render_session_clear_data(renderer._session);
+      }
+      if (renderer._map != nullptr) _b.mln_map_request_repaint(renderer._map);
+    }
   }
 
   static double _round2(double v) => (v * 100).roundToDouble() / 100;

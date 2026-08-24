@@ -150,6 +150,12 @@ class _MapPageState extends State<MapPage> with SingleTickerProviderStateMixin {
           for (final region in regions) {
             debugPrint('[cache-probe] listed: $region');
           }
+          // Kill-switch leg: flip the cache key once the seed is in, so the
+          // harness can watch the purge capture → delete → clear → reseed →
+          // nudge sequence run against real regions and a live map.
+          if (const bool.fromEnvironment('FMM_AUTO_KEYFLIP')) {
+            await _flipCacheKey();
+          }
         },
         onError: (Object e) {
           debugPrint('[cache-probe] seed failed: $e');
@@ -157,6 +163,22 @@ class _MapPageState extends State<MapPage> with SingleTickerProviderStateMixin {
       ),
     );
     setState(() => _seed = handle);
+  }
+
+  /// Simulates the Remote Config kill switch: a fresh key every press.
+  Future<void> _flipCacheKey() async {
+    final key = 'flip-${DateTime.now().millisecondsSinceEpoch}';
+    debugPrint('[cache-probe] setCacheKey($key)');
+    try {
+      await MaplibreCache.setCacheKey(key);
+      debugPrint('[cache-probe] purge committed for $key');
+      final regions = await MaplibreOffline.listRegions();
+      for (final region in regions) {
+        debugPrint('[cache-probe] after purge: $region');
+      }
+    } on Object catch (e) {
+      debugPrint('[cache-probe] setCacheKey failed: $e');
+    }
   }
 
   void _cycleLatencyFrames() {
@@ -311,6 +333,12 @@ class _MapPageState extends State<MapPage> with SingleTickerProviderStateMixin {
                             ? Icons.download_for_offline_outlined
                             : Icons.stop_circle_outlined,
                       ),
+                    ),
+                    const SizedBox(height: 8),
+                    FloatingActionButton.small(
+                      heroTag: 'cachekey',
+                      onPressed: _flipCacheKey,
+                      child: const Icon(Icons.key_off),
                     ),
                     const SizedBox(height: 8),
                     // Multi-instance test case: push a second screen with its

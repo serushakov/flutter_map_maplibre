@@ -52,6 +52,10 @@ abstract interface class WorkerLink {
   void postRender(int gen);
   void postSetStyle(String url);
 
+  /// Cache-purge nudge: empties the render sources so every visible tile
+  /// re-fetches (a same-URL style reload alone keeps in-memory tiles).
+  void postClearData();
+
   /// After this the worker frees itself once the queue drains; this link
   /// instance must not be posted to again (the facade starts a fresh link
   /// per session).
@@ -107,6 +111,10 @@ class FfiWorkerLink implements WorkerLink {
   static final void Function(int, Pointer<Utf8>) _postStyle = mlnLibrary
       .lookupFunction<_PostStyleNative, void Function(int, Pointer<Utf8>)>(
         'fmm_worker_post_set_style',
+      );
+  static final void Function(int) _postClearData = mlnLibrary
+      .lookupFunction<_PostVoidNative, void Function(int)>(
+        'fmm_worker_post_clear_data',
       );
   static final void Function(int) _postDestroy = mlnLibrary
       .lookupFunction<_PostVoidNative, void Function(int)>(
@@ -179,6 +187,9 @@ class FfiWorkerLink implements WorkerLink {
     _postStyle(_worker, native);
     calloc.free(native);
   }
+
+  @override
+  void postClearData() => _postClearData(_worker);
 
   @override
   void postDestroy() => _postDestroy(_worker);

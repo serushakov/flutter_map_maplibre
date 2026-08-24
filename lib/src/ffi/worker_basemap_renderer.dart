@@ -45,6 +45,24 @@ class WorkerBasemapRenderer implements BasemapRenderer {
   Duration get _now => _arrivalClock?.call() ?? _arrivalStopwatch.elapsed;
 
   WorkerLink? _link;
+  String? _currentStyleUrl;
+
+  /// Live instances, for the cache-purge nudge.
+  static final Set<WorkerBasemapRenderer> _live = {};
+
+  /// Cache-purge nudge (spec source check 0.1), worker flavor: same-URL
+  /// style reload (full style-tree re-fetch) plus the worker's kClearData
+  /// (drops the render sources so every visible tile re-fetches).
+  static void nudgeAllForCachePurge() {
+    for (final renderer in List.of(_live)) {
+      final url = renderer._currentStyleUrl;
+      final link = renderer._link;
+      if (url == null || link == null || !renderer._ready) continue;
+      renderer.setStyle(url);
+      link.postClearData();
+    }
+  }
+
   ReceivePort? _port;
   // The port (and its fallback timer) of a session currently being torn
   // down. Kept separate from [_port] so a stale DESTROYED — or the fallback
@@ -150,6 +168,8 @@ class WorkerBasemapRenderer implements BasemapRenderer {
     }
     _link = link;
     _port = port;
+    _currentStyleUrl = styleUrl;
+    _live.add(this);
     port.listen(handleCompletion);
     final completer = Completer<bool>();
     _createCompleter = completer;
@@ -300,6 +320,7 @@ class WorkerBasemapRenderer implements BasemapRenderer {
   void setStyle(String styleUrl) {
     final link = _link;
     if (!_ready || link == null) return;
+    _currentStyleUrl = styleUrl;
     link.postSetStyle(styleUrl);
     // Any pump already outstanding predates this style change: its eventual
     // idle report is stale for the same reason a pre-jump pump's is (see
@@ -494,6 +515,7 @@ class WorkerBasemapRenderer implements BasemapRenderer {
 
   @override
   void dispose() {
+    _live.remove(this);
     _teardownLink();
     _createCompleter?.complete(false);
     _createCompleter = null;

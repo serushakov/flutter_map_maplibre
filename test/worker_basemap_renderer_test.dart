@@ -62,6 +62,9 @@ class FakeLink implements WorkerLink {
   void postSetStyle(String url) => calls.add('style:$url');
 
   @override
+  void postClearData() => calls.add('clearData');
+
+  @override
   void postDestroy() => calls.add('destroy');
 }
 

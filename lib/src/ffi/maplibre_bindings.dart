@@ -910,6 +910,17 @@ class MaplibreBindings {
   late final _mln_render_session_destroy = _mln_render_session_destroyPtr
       .asFunction<int Function(ffi.Pointer<mln_render_session>)>();
 
+  int mln_render_session_clear_data(ffi.Pointer<mln_render_session> session) {
+    return _mln_render_session_clear_data(session);
+  }
+
+  late final _mln_render_session_clear_dataPtr =
+      _lookup<
+        ffi.NativeFunction<ffi.Int32 Function(ffi.Pointer<mln_render_session>)>
+      >('mln_render_session_clear_data');
+  late final _mln_render_session_clear_data = _mln_render_session_clear_dataPtr
+      .asFunction<int Function(ffi.Pointer<mln_render_session>)>();
+
   mln_metal_borrowed_texture_descriptor
   mln_metal_borrowed_texture_descriptor_default() {
     return _mln_metal_borrowed_texture_descriptor_default();

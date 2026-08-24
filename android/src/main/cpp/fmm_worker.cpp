@@ -57,7 +57,15 @@ double NowMs() {
   return ts.tv_sec * 1000.0 + ts.tv_nsec / 1e6;
 }
 
-enum class CmdType { kCreate, kPump, kJump, kRender, kSetStyle, kDestroy };
+enum class CmdType {
+  kCreate,
+  kPump,
+  kJump,
+  kRender,
+  kSetStyle,
+  kClearData,
+  kDestroy,
+};
 
 struct Command {
   CmdType type;
@@ -133,6 +141,9 @@ class Worker {
           break;
         case CmdType::kSetStyle:
           SetStyle(cmd);
+          break;
+        case CmdType::kClearData:
+          ClearData();
           break;
         case CmdType::kDestroy:
           Destroy();
@@ -268,6 +279,15 @@ class Worker {
     if (map_ == nullptr) return;
     mln_map_set_style_url(map_, cmd.url.c_str());
     mln_map_request_repaint(map_);
+  }
+
+  // Cache-purge nudge (spec source check 0.1): a same-URL style reload
+  // keeps the in-memory tile pyramids (value-equal tileset), so the purge
+  // also empties the render sources; the next update re-creates them and
+  // every visible tile re-fetches.
+  void ClearData() {
+    if (session_ != nullptr) mln_render_session_clear_data(session_);
+    if (map_ != nullptr) mln_map_request_repaint(map_);
   }
 
   void Destroy() {
@@ -942,6 +962,13 @@ __attribute__((visibility("default"))) void fmm_worker_post_set_style(
   Command cmd;
   cmd.type = CmdType::kSetStyle;
   cmd.url = url;
+  AsWorker(worker)->Post(std::move(cmd));
+}
+
+__attribute__((visibility("default"))) void fmm_worker_post_clear_data(
+    int64_t worker) {
+  Command cmd;
+  cmd.type = CmdType::kClearData;
   AsWorker(worker)->Post(std::move(cmd));
 }
 
