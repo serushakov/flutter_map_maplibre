@@ -108,6 +108,31 @@ class _MapPageState extends State<MapPage> with SingleTickerProviderStateMixin {
     if (const bool.fromEnvironment('FMM_AUTO_TOUR')) {
       Future<void>.delayed(const Duration(seconds: 8), _runTour);
     }
+    // Covered-purge harness: cover the map with an opaque route, force
+    // offline + clear the ambient class while covered, pop. The refocused
+    // map must not keep presenting pre-purge pixels.
+    if (const bool.fromEnvironment('FMM_AUTO_COVERPURGE')) {
+      Future<void>.delayed(const Duration(seconds: 12), _runCoverPurge);
+    }
+  }
+
+  Future<void> _runCoverPurge() async {
+    if (!mounted) return;
+    debugPrint('[coverpurge] covering');
+    final nav = Navigator.of(context);
+    final route = MaterialPageRoute<void>(
+      builder: (_) =>
+          const Scaffold(body: Center(child: Text('covering route'))),
+    );
+    unawaited(nav.push(route));
+    await Future<void>.delayed(const Duration(seconds: 3));
+    debugPrint('[coverpurge] offline + clear');
+    MaplibreNetwork.setOffline(true);
+    await MaplibreOffline.clearAmbientCache();
+    debugPrint('[coverpurge] cleared');
+    await Future<void>.delayed(const Duration(seconds: 5));
+    debugPrint('[coverpurge] popping');
+    nav.removeRoute(route);
   }
 
   Future<void> _runTour() async {

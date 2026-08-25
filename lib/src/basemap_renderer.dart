@@ -115,6 +115,20 @@ abstract interface class BasemapRenderer {
   /// Swaps the style in place. No-op when not ready.
   void setStyle(String styleUrl);
 
+  /// Set by the widget from TickerMode: true while an opaque route covers
+  /// the map (subtree muted). While covered, a cache-purge nudge is
+  /// deferred instead of applied — a muted map consumes no repaints, and a
+  /// half-applied nudge leaves the texture presenting pre-purge pixels
+  /// indefinitely (the blit re-presents the undrawn framebuffer and the
+  /// settle guard then reports the camera as already rendered).
+  abstract bool coveredForCachePurge;
+
+  /// True when a cache purge landed while [coveredForCachePurge] was set;
+  /// consumes the flag. The widget calls this on refocus and, when true,
+  /// recreates the whole session — the cold-start path, which provably
+  /// renders the post-purge truth.
+  bool flushCachePurgeNudge();
+
   Map<String, Object?> diagnostics();
 
   /// Destroys session, map, and runtime on the calling (UI) thread.

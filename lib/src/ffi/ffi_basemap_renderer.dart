@@ -620,13 +620,44 @@ class FfiBasemapRenderer implements BasemapRenderer {
   /// re-fetch. Owner-thread only, which is exactly this thread.
   static void nudgeAllForCachePurge() {
     for (final renderer in List.of(_liveByMap.values)) {
-      final url = renderer._currentStyleUrl;
-      if (url != null) renderer.setStyle(url);
-      if (renderer._session != nullptr) {
-        _b.mln_render_session_clear_data(renderer._session);
+      if (renderer.coveredForCachePurge) {
+        // Device-found: nudging a covered map is worse than useless — the
+        // muted ticker consumes no repaints, the one render that does land
+        // at refocus blits the undrawn framebuffer (pre-purge pixels) and
+        // republishes its camera, and the settle guard then pins that
+        // stale frame forever. Defer instead; the widget recreates the
+        // session on refocus.
+        renderer._pendingPurgeNudge = true;
+      } else {
+        renderer._purgeNudge();
       }
-      if (renderer._map != nullptr) _b.mln_map_request_repaint(renderer._map);
     }
+  }
+
+  @override
+  bool coveredForCachePurge = false;
+
+  bool _pendingPurgeNudge = false;
+
+  void _purgeNudge() {
+    final url = _currentStyleUrl;
+    if (url != null) setStyle(url);
+    if (_session != nullptr) {
+      _b.mln_render_session_clear_data(_session);
+    }
+    // The settle guard keys on camera, not content: after a purge the
+    // current camera's frame is stale, so forget rendered history or the
+    // next render request reports "already rendered" and never draws.
+    _pendingRenderedCameras.clear();
+    _lastRenderedCamera = null;
+    if (_map != nullptr) _b.mln_map_request_repaint(_map);
+  }
+
+  @override
+  bool flushCachePurgeNudge() {
+    if (!_pendingPurgeNudge) return false;
+    _pendingPurgeNudge = false;
+    return true;
   }
 
   static double _round2(double v) => (v * 100).roundToDouble() / 100;

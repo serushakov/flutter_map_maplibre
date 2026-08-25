@@ -217,8 +217,32 @@ class _MapLibreBasemapState extends State<MapLibreBasemap>
   /// owner-thread work (tile expiry), not observability.
   void _onTickerModeChanged() {
     if (_tickerModeNotifier?.value.enabled ?? true) {
-      if (_textureId != null) _startDiagnosticsPolling();
+      _renderer.coveredForCachePurge = false;
+      if (_textureId != null) {
+        _startDiagnosticsPolling();
+        // Post-frame: ticker-mode flips land during route transitions,
+        // where setState is not legal synchronously.
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          if (_renderer.flushCachePurgeNudge()) {
+            // A cache purge landed while this map was covered. The
+            // in-place nudge is unreliable here (device-found: the muted
+            // ticker consumes no repaints, and the refocus blit
+            // re-presents pre-purge pixels which the settle guard then
+            // pins), so take the cold-start path: null the session
+            // identity and let build recreate it over the purged cache.
+            setState(() => _viewportSize = null);
+          } else {
+            // Covered maps miss ordinary repaints too (a style reload, a
+            // tile update): force one honest render on refocus; when
+            // nothing changed it costs a single no-op frame.
+            setState(() => _settleForced = true);
+            _wake();
+          }
+        });
+      }
     } else {
+      _renderer.coveredForCachePurge = true;
       _diagnosticsTimer?.cancel();
       _diagnosticsTimer = null;
     }

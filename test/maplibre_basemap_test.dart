@@ -85,6 +85,20 @@ class _FakeRenderer implements BasemapRenderer {
     canSleepValue = false;
   }
 
+  int flushNudgeCalls = 0;
+  bool pendingNudge = false;
+
+  @override
+  bool coveredForCachePurge = false;
+
+  @override
+  bool flushCachePurgeNudge() {
+    flushNudgeCalls++;
+    final was = pendingNudge;
+    pendingNudge = false;
+    return was;
+  }
+
   @override
   Map<String, Object?> diagnostics() => <String, Object?>{
     'renderMsInline': 2.5,
@@ -412,6 +426,88 @@ void main() {
     await tester.pumpWidget(host(enabled: true));
     await tester.pump(const Duration(seconds: 1));
     expect(polls, 2);
+  });
+
+  testWidgets('refocus flushes a pending cache-purge nudge and re-renders', (
+    tester,
+  ) async {
+    // A cache purge nudged while the route was covered is lost to the
+    // muted ticker; refocus must flush it and force one honest render so
+    // the texture never keeps presenting pre-purge pixels.
+    controller = MapController();
+    Widget host({required bool enabled}) => MaterialApp(
+      home: TickerMode(
+        enabled: enabled,
+        child: FlutterMap(
+          mapController: controller,
+          options: const MapOptions(
+            initialCenter: LatLng(59.437, 24.7536),
+            initialZoom: 13,
+          ),
+          children: [
+            MapLibreBasemap(
+              styleUrl: 'https://example.com/style.json',
+              rendererFactory: () => renderer,
+            ),
+          ],
+        ),
+      ),
+    );
+    await tester.pumpWidget(host(enabled: true));
+    await tester.pump();
+    await tester.pump();
+    final rendersBefore = renderer.renderCalls;
+    final flushesBefore = renderer.flushNudgeCalls;
+
+    await tester.pumpWidget(host(enabled: false));
+    await tester.pump();
+    expect(renderer.coveredForCachePurge, isTrue);
+
+    await tester.pumpWidget(host(enabled: true));
+    await tester.pump();
+    await tester.pump();
+    expect(renderer.coveredForCachePurge, isFalse);
+    expect(renderer.flushNudgeCalls, greaterThan(flushesBefore));
+    expect(renderer.renderCalls, greaterThan(rendersBefore));
+  });
+
+  testWidgets('purge under cover recreates the session on refocus', (
+    tester,
+  ) async {
+    controller = MapController();
+    Widget host({required bool enabled}) => MaterialApp(
+      home: TickerMode(
+        enabled: enabled,
+        child: FlutterMap(
+          mapController: controller,
+          options: const MapOptions(
+            initialCenter: LatLng(59.437, 24.7536),
+            initialZoom: 13,
+          ),
+          children: [
+            MapLibreBasemap(
+              styleUrl: 'https://example.com/style.json',
+              rendererFactory: () => renderer,
+            ),
+          ],
+        ),
+      ),
+    );
+    await tester.pumpWidget(host(enabled: true));
+    await tester.pump();
+    await tester.pump();
+    final createsBefore = renderer.createCalls;
+
+    await tester.pumpWidget(host(enabled: false));
+    await tester.pump();
+    // The purge lands while covered: the renderer defers it.
+    renderer.pendingNudge = true;
+
+    await tester.pumpWidget(host(enabled: true));
+    await tester.pump();
+    await tester.pump();
+    await tester.pump();
+    expect(renderer.createCalls, greaterThan(createsBefore));
   });
 
   testWidgets('reports renderer diagnostics on the polling timer', (

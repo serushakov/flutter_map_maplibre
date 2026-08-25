@@ -55,12 +55,39 @@ class WorkerBasemapRenderer implements BasemapRenderer {
   /// (drops the render sources so every visible tile re-fetches).
   static void nudgeAllForCachePurge() {
     for (final renderer in List.of(_live)) {
-      final url = renderer._currentStyleUrl;
-      final link = renderer._link;
-      if (url == null || link == null || !renderer._ready) continue;
-      renderer.setStyle(url);
-      link.postClearData();
+      if (renderer.coveredForCachePurge) {
+        // Same covered-map hazard as the FFI renderer (see there): defer,
+        // and the widget recreates the session on refocus.
+        renderer._pendingPurgeNudge = true;
+      } else {
+        renderer._purgeNudge();
+      }
     }
+  }
+
+  @override
+  bool coveredForCachePurge = false;
+
+  bool _pendingPurgeNudge = false;
+
+  void _purgeNudge() {
+    final url = _currentStyleUrl;
+    final link = _link;
+    if (url == null || link == null || !_ready) return;
+    setStyle(url);
+    link.postClearData();
+    // Both render guards key on camera, not content — a purged frame must
+    // not count as "already rendered" (or "already jumped") for the
+    // camera it shows.
+    _lastRenderedCamera = null;
+    _jumpedCamera = null;
+  }
+
+  @override
+  bool flushCachePurgeNudge() {
+    if (!_pendingPurgeNudge) return false;
+    _pendingPurgeNudge = false;
+    return true;
   }
 
   ReceivePort? _port;
