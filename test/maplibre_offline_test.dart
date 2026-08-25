@@ -381,6 +381,15 @@ void main() {
     expect(link.disposed, true);
   });
 
+  test('clearAmbientCache clears, nudges, and goes idle', () async {
+    var nudges = 0;
+    MaplibreOffline.nudgeLiveRenderers = () => nudges++;
+    await MaplibreOffline.clearAmbientCache();
+    expect(link.log, ['ambient:clear']);
+    expect(nudges, 1);
+    expect(link.disposed, true);
+  });
+
   test('a link that cannot start surfaces as StateError', () async {
     MaplibreOffline.debugLinkFactory = _NoStartLink.new;
     await expectLater(createTallinn(), throwsStateError);

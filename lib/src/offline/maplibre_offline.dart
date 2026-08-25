@@ -276,6 +276,28 @@ class MaplibreOffline {
     }
   }
 
+  /// Clears the ambient (LRU) class of the cache and re-renders live maps
+  /// from what remains. Seeded region resources are pinned outside the
+  /// ambient class and survive untouched.
+  ///
+  /// A debugging tool, the counterpart of `MaplibreNetwork.setOffline`:
+  /// forced offline with the ambient class cleared, a live map shows
+  /// exactly what an offline cold start would show — the seeds in
+  /// isolation. Production flows never need it: eviction bounds the
+  /// ambient class and the cache-key purge already clears it.
+  static Future<void> clearAmbientCache() async {
+    _busy++;
+    try {
+      await _request<Object?>(
+        (id, link) => link.ambientOp(requestId: id, op: AmbientCacheOp.clear),
+      );
+      nudgeLiveRenderers();
+    } finally {
+      _busy--;
+      _maybeGoIdle();
+    }
+  }
+
   // --- cache key (the remote kill switch) ---------------------------------
 
   /// The purge nudge for live maps, swappable in tests.
