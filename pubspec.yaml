@@ -55,6 +55,12 @@ flutter:
       ios:
         pluginClass: FlutterMapMaplibrePlugin
 
+  # Notices of the statically linked native stack, surfaced on the host
+  # app's licenses page by registerMaplibreLicenses(). Kept in step with the
+  # native release assets by scripts/package_native.sh.
+  assets:
+    - licenses/
+
   # To add assets to your plugin package, add an assets section, like this:
   # assets:
   #   - images/a_dot_burr.jpeg

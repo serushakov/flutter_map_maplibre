@@ -55,6 +55,12 @@ maplibre-native-ffi $ffi_rev
 Preset: android-arm64-egl, NDK 28.2.13676358.
 EOF
 
+# The same notices, as the package assets registerMaplibreLicenses() reads,
+# so the licenses page matches the binaries being published.
+cp "$ffi/LICENSE" "$root/licenses/maplibre-native-ffi.LICENSE"
+cp "$ffi/third_party/maplibre-native/LICENSES.core.md" \
+  "$root/licenses/maplibre-native.LICENSES.core.md"
+
 rm -f "$out/mln-ios.zip" "$out/mln-android.zip"
 (cd "$stage/ios" && zip -qr -9 "$out/mln-ios.zip" .)
 (cd "$stage/android" && zip -qr -9 "$out/mln-android.zip" .)

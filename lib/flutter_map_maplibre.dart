@@ -1,5 +1,6 @@
 export 'src/basemap_renderer.dart';
 export 'src/cache_config.dart';
+export 'src/licenses.dart' show registerMaplibreLicenses;
 export 'src/ffi/ffi_basemap_renderer.dart';
 export 'src/ffi/worker_basemap_renderer.dart';
 export 'src/ffi/worker_link.dart';

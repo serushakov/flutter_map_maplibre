@@ -468,8 +468,12 @@ upstream constrains that choice:
   BSD-3-Clause, vendored as upstream intends and carrying their own notices.
 
 Linking the archives statically means an app that ships this package
-redistributes them in binary form, so it must reproduce their notices (for a
-Flutter app, `LicenseRegistry.addLicense` with the texts from the zips).
+redistributes them in binary form, so it must reproduce their notices. Call
+`registerMaplibreLicenses()` once at startup: it adds maplibre-native-ffi
+and each component MapLibre Native bundles to Flutter's `LicenseRegistry`,
+so they appear on the app's licenses page. The texts ship as package assets
+(`licenses/`, kept in step with the binaries by `scripts/package_native.sh`)
+and are read only when that page opens.
 
 Attribution is a separate obligation from licensing: tile and style
 attribution belongs to the consuming app, and this package does not yet make
