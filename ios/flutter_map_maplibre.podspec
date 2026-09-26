@@ -2,6 +2,41 @@
 # To learn more about a Podspec see http://guides.cocoapods.org/syntax/podspec.html.
 # Run `pod lib lint flutter_map_maplibre.podspec` to validate before publishing.
 #
+require 'digest'
+require 'fileutils'
+
+# The prebuilt MaplibreNativeC.xcframework is too big for git; it is a GitHub
+# release asset (made by scripts/package_native.sh) fetched here, at
+# `pod install`. CocoaPods never runs prepare_command for Flutter plugins
+# (they are :path pods), so the fetch is plain Ruby at evaluation time.
+#
+# A stamp file records which asset is unpacked, so bumping the hash below
+# re-fetches. An xcframework with no stamp is a local build of
+# maplibre-native-ffi and is left alone.
+mln_release = 'https://github.com/serushakov/flutter_map_maplibre/releases/download/native-94e6f08'
+mln_sha256 = '1aed1dfea3764e5fda6bddeb119c774ecf80f68c799275aadb74719f90a7db51'
+mln_dir = File.dirname(File.expand_path(__FILE__))
+mln_xcf = File.join(mln_dir, 'MaplibreNativeC.xcframework')
+mln_stamp = File.join(mln_dir, '.mln-native-sha')
+mln_stamped = File.exist?(mln_stamp) && File.read(mln_stamp).strip == mln_sha256
+mln_local = File.exist?(mln_xcf) && !File.exist?(mln_stamp)
+unless mln_stamped || mln_local
+  zip = File.join(mln_dir, 'mln-ios.zip')
+  Pod::UI.puts "flutter_map_maplibre: downloading #{mln_release}/mln-ios.zip"
+  system('curl', '-fsSL', '--retry', '3', '-o', zip, "#{mln_release}/mln-ios.zip") ||
+    raise('flutter_map_maplibre: downloading the native xcframework failed')
+  actual = Digest::SHA256.file(zip).hexdigest
+  unless actual == mln_sha256
+    FileUtils.rm_f(zip)
+    raise "flutter_map_maplibre: mln-ios.zip checksum #{actual}, expected #{mln_sha256}"
+  end
+  FileUtils.rm_rf([mln_xcf, File.join(mln_dir, 'MaplibreNativeC.licenses')])
+  system('unzip', '-q', '-o', zip, '-d', mln_dir) ||
+    raise('flutter_map_maplibre: unpacking the native xcframework failed')
+  FileUtils.rm_f(zip)
+  File.write(mln_stamp, mln_sha256)
+end
+
 Pod::Spec.new do |s|
   s.name             = 'flutter_map_maplibre'
   s.version          = '0.0.1'
@@ -25,8 +60,8 @@ with the camera owned by Dart.
   # to 14.3, so this cannot go lower while the xcframework is linked.
   s.platform = :ios, '14.3'
 
-  # Built from source out of maplibre-native-ffi. NOT committed — see
-  # .gitignore. Produced by:
+  # Built from source out of maplibre-native-ffi. NOT committed — downloaded
+  # above, or built locally by:
   #   cmake --preset ios-simulator-arm64-metal
   #   cmake --build --preset ios-simulator-arm64-metal
   #   xcodebuild -create-xcframework -library libmaplibre-native-c.a \

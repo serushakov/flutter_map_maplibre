@@ -1,0 +1,19 @@
+flutter_map_maplibre
+Copyright (c) 2026 Sergey Ushakov. MIT, see LICENSE.
+
+Third-party code in this repository and in its build:
+
+- `android/src/main/cpp/dart_include/` — Dart SDK headers and `dart_api_dl.c`,
+  Copyright (c) 2020 the Dart project authors, BSD-3-Clause. Vendored as
+  upstream intends; these files carry their own notices.
+
+- maplibre-native-ffi and MapLibre Native — BSD 2-Clause, Copyright (c)
+  MapLibre contributors, MapTiler.com, Mapbox. Not vendored here: the build
+  downloads prebuilt static archives from this repository's GitHub releases
+  (see README, "Native binaries"). Each release zip carries the full notices
+  for what it contains — MapLibre Native's own bundled dependencies
+  (`maplibre-native.LICENSES.core.md`) and, on Android, the Rust crates
+  linked into the archive (`rust-crates.md`).
+
+Apps that ship this package link those archives statically, so they must
+reproduce those notices too — e.g. through Flutter's LicenseRegistry.

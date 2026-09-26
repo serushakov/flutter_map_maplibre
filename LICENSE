@@ -19,16 +19,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
----
-
-Third-party code in this repository and in its build:
-
-- `android/src/main/cpp/dart_include/` — Dart SDK headers and `dart_api_dl.c`,
-  Copyright (c) 2020 the Dart project authors, BSD-3-Clause. Vendored as
-  upstream intends; these files carry their own notices.
-
-- maplibre-native-ffi and MapLibre Native — linked, not vendored here.
-  BSD 2-Clause, Copyright (c) MapLibre contributors, MapTiler.com, Mapbox.
-  Their own bundled dependencies are enumerated upstream in
-  `third_party/maplibre-native/LICENSES.core.md`.

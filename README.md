@@ -6,8 +6,8 @@ composited as a Flutter texture underneath your existing layers.
 `flutter_map` keeps the camera. Every marker, polyline and overlay stays an
 ordinary Flutter widget. Only the basemap is native.
 
-**Private package.** Not published to pub.dev; consumed as a git dependency
-(see [Install](#install)).
+Not published to pub.dev (its native archives exceed pub.dev's size limit);
+consumed as a git dependency (see [Install](#install)).
 
 ## Status
 
@@ -51,22 +51,34 @@ dependencies:
       ref: <full commit SHA>
 ```
 
-Pin a full SHA, not a branch: the native prerequisites below are version-coupled
+Pin a full SHA, not a branch: the native binaries below are version-coupled
 to the Dart bindings.
 
-### Native prerequisites
+### Native binaries
 
 Two artifacts are built from
 [maplibre-native-ffi](https://github.com/maplibre/maplibre-native-ffi) and are
-**not committed** — they total ~1.5 GB, so a fresh clone cannot build until
-they are in place:
+**not committed** — they total ~1.5 GB unpacked. They are published as
+[GitHub release assets](https://github.com/serushakov/flutter_map_maplibre/releases)
+and fetched by the build itself, checksum-verified, so a plain `flutter pub get`
+plus a normal build is all a consuming app needs:
 
-| path | what | size |
+| path | fetched by | asset |
 |---|---|---|
-| `ios/MaplibreNativeC.xcframework` | `ios-arm64` + `ios-arm64-simulator` static slices, with headers and a `module.modulemap` | 1.4 GB |
-| `android/src/main/cpp/prebuilt/arm64-v8a/libmaplibre-native-c.a` | complete static archive | 60 MB |
+| `ios/MaplibreNativeC.xcframework` — `ios-arm64` + `ios-arm64-simulator` static slices | the podspec, during `pod install` | `mln-ios.zip`, ~375 MB |
+| `android/src/main/cpp/prebuilt/arm64-v8a/libmaplibre-native-c.a` | `CMakeLists.txt`, at configure time | `mln-android.zip`, ~14 MB |
 
-`android/src/main/cpp/prebuilt/include/` (the C headers) **is** tracked.
+Each asset is fetched once per package checkout. `android/src/main/cpp/prebuilt/include/`
+(the C headers) **is** tracked. Each zip also carries the license notices for
+what it contains — see [NOTICE](NOTICE); an app that ships this package must
+reproduce them.
+
+**Local native builds win.** An artifact already in place without a
+`.mln-native-sha` stamp next to it is treated as a local build and never
+overwritten. To publish new binaries: build both, run
+`scripts/package_native.sh <maplibre-native-ffi checkout> build/native-release`,
+upload the zips to a release tagged `native-<ffi short sha>`, and update the
+URL and SHA-256 in the podspec and `CMakeLists.txt`.
 
 The build recipes live in the podspec and `android/src/main/cpp/CMakeLists.txt`
 next to the paths they produce. The long version — and the thirteen distinct
@@ -435,16 +447,24 @@ Read them as repo-relative.
 
 ## License
 
-MIT — see [`LICENSE`](LICENSE). The repository is private; the license governs
-the code if and when it is distributed.
+MIT — see [`LICENSE`](LICENSE). Third-party notices are in [`NOTICE`](NOTICE).
 
 The native stack it links is permissively licensed throughout, so nothing
 upstream constrains that choice:
 
-- maplibre-native-ffi and MapLibre Native — BSD 2-Clause. Linked, not vendored
-  here. Their own bundled dependencies contain no reciprocal licenses.
+- maplibre-native-ffi and MapLibre Native — BSD 2-Clause. Downloaded as
+  prebuilt archives, not vendored here. Their own bundled dependencies
+  contain no reciprocal licenses.
+- The Rust crates linked into the Android archive (HTTP, TLS, image
+  decoding) — MIT / Apache-2.0 / ISC / BSD / Zlib / Unicode-3.0, plus
+  CDLA-Permissive-2.0 for the webpki root certificates. Full texts in
+  `rust-crates.md` inside `mln-android.zip`.
 - `android/src/main/cpp/dart_include/` — Dart SDK headers and `dart_api_dl.c`,
   BSD-3-Clause, vendored as upstream intends and carrying their own notices.
+
+Linking the archives statically means an app that ships this package
+redistributes them in binary form, so it must reproduce their notices (for a
+Flutter app, `LicenseRegistry.addLicense` with the texts from the zips).
 
 Attribution is a separate obligation from licensing: tile and style
 attribution belongs to the consuming app, and this package does not yet make

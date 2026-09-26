@@ -31,7 +31,13 @@ migrate_working_dir/
 .flutter-plugins-dependencies
 /build/
 /coverage/
+# Native binaries: release assets fetched at build time (see
+# scripts/package_native.sh), or a local maplibre-native-ffi build.
+# prebuilt/include/ is tracked despite this.
 MaplibreNativeC.xcframework/
+MaplibreNativeC.licenses/
+mln-ios.zip
+.mln-native-sha
 android/src/main/cpp/prebuilt/
 
 # fvm
