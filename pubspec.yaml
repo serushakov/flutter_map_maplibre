@@ -43,9 +43,15 @@ flutter:
   # adding or updating assets for this project.
   plugin:
     platforms:
-      android:
-        package: io.ushakov.flutter_map_maplibre
-        pluginClass: FlutterMapMaplibrePlugin
+      # Android is deliberately not declared for now. The android/ sources
+      # stay and build, but undeclared, Flutter never registers the plugin,
+      # runs its CMake or packs libmln_jni.so into a host app: the Android
+      # renderer has not passed its on-device gate, and the prebuilt archive
+      # is arm64-v8a only while the plugin loads its library at attach, so a
+      # 32-bit device would crash on launch. To re-enable, restore:
+      #   android:
+      #     package: io.ushakov.flutter_map_maplibre
+      #     pluginClass: FlutterMapMaplibrePlugin
       ios:
         pluginClass: FlutterMapMaplibrePlugin
 

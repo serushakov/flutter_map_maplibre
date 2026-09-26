@@ -14,6 +14,11 @@ consumed as a git dependency (see [Install](#install)).
 Working spike. Both platforms render real vector tiles and have run on
 physical hardware in profile builds.
 
+**Android is not declared as a plugin platform for now** (see the note in
+`pubspec.yaml`): host apps get no Android native code, and the Dart API
+must not be used there. The Android sources stay in the tree and the
+example builds them once the declaration is restored.
+
 | | iOS | Android |
 |---|---|---|
 | Backend | Metal, borrowed texture | EGL/GLES3 → `SurfaceProducer` |
